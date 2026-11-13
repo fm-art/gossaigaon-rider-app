@@ -11,6 +11,7 @@ import android.provider.Settings;
 import android.webkit.GeolocationPermissions;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
@@ -33,6 +34,10 @@ public class MainActivity extends AppCompatActivity {
     private static final int REQ_BASE_PERMS = 101;
     private static final int REQ_BG_LOC = 102;
 
+    // ⚠️ Yahan 'gossaigaon-rider-app' ki jagah apna exact repo naam likhein
+    private static final String LIVE_RIDER_URL = "https://fm-art.github.io/gossaigaon-rider-app/app/src/main/assets/deliver.html";
+    private static final String OFFLINE_FALLBACK_URL = "https://appassets.androidplatform.net/assets/deliver.html";
+
     private WebView webView;
     private String pendingUid, pendingToken, pendingRefresh, pendingApiKey, pendingDbUrl, pendingOrderIds;
     private boolean hasPendingStart = false;
@@ -50,6 +55,7 @@ public class MainActivity extends AppCompatActivity {
         settings.setDomStorageEnabled(true);
         settings.setDatabaseEnabled(true);
         settings.setGeolocationEnabled(true);
+        settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
         settings.setMediaPlaybackRequiresUserGesture(false);
 
         final WebViewAssetLoader assetLoader = new WebViewAssetLoader.Builder()
@@ -59,14 +65,17 @@ public class MainActivity extends AppCompatActivity {
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
-                return assetLoader.shouldInterceptRequest(request.getUrl());
+                if (request.getUrl().toString().startsWith("https://appassets.androidplatform.net/")) {
+                    return assetLoader.shouldInterceptRequest(request.getUrl());
+                }
+                return super.shouldInterceptRequest(view, request);
             }
 
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 Uri uri = request.getUrl();
                 String url = uri.toString();
-                if (url.startsWith("https://appassets.androidplatform.net/")) {
+                if (url.startsWith("https://fm-art.github.io/") || url.startsWith("https://appassets.androidplatform.net/")) {
                     return false;
                 }
                 if (url.startsWith("tel:")) {
@@ -81,6 +90,13 @@ public class MainActivity extends AppCompatActivity {
                 }
                 return false;
             }
+
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                if (request.isForMainFrame() && !request.getUrl().toString().startsWith("https://appassets.androidplatform.net/")) {
+                    view.loadUrl(OFFLINE_FALLBACK_URL);
+                }
+            }
         });
 
         webView.setWebChromeClient(new WebChromeClient() {
@@ -91,7 +107,7 @@ public class MainActivity extends AppCompatActivity {
         });
 
         webView.addJavascriptInterface(new RiderJsBridge(), "AndroidBridge");
-        webView.loadUrl("https://appassets.androidplatform.net/assets/deliver.html");
+        webView.loadUrl(LIVE_RIDER_URL);
 
         requestInitialPermissions();
 
