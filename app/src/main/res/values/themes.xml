@@ -1,0 +1,11 @@
+<resources>
+    <style name="Theme.GossaigaonRider" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#16A34A</item>
+        <item name="colorPrimaryVariant">#15803D</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorSecondary">#38BDF8</item>
+        <item name="android:windowBackground">#050811</item>
+        <item name="android:statusBarColor">#090E1A</item>
+        <item name="android:navigationBarColor">#090E1A</item>
+    </style>
+</resources>
