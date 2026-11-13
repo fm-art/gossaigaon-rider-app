@@ -8,12 +8,12 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
+import android.media.RingtoneManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -25,35 +25,49 @@ import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
 import androidx.core.content.ContextCompat;
 
-import org.json.JSONObject;
+import com.google.firebase.auth.FirebaseAuth;
+import com.google.firebase.auth.FirebaseUser;
+import com.google.firebase.database.DataSnapshot;
+import com.google.firebase.database.DatabaseError;
+import com.google.firebase.database.DatabaseReference;
+import com.google.firebase.database.FirebaseDatabase;
+import com.google.firebase.database.ValueEventListener;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 public class LocationForegroundService extends Service implements LocationListener {
 
     public static final String ACTION_START = "ACTION_START";
     public static final String ACTION_STOP = "ACTION_STOP";
-    private static final String CHANNEL_ID = "gossaigaon_rider_gps";
-    private static final int NOTIF_ID = 777;
+    private static final String CHANNEL_GPS = "gossaigaon_rider_gps";
+    private static final String CHANNEL_ORDER = "gossaigaon_new_order";
+    private static final int NOTIF_GPS_ID = 777;
+    private static final int NOTIF_ORDER_ID = 888;
     private static final long SYNC_INTERVAL_MS = 5000L;
 
     private LocationManager locationManager;
     private PowerManager.WakeLock wakeLock;
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
     private double lastLat = 0.0;
     private double lastLng = 0.0;
+    private double trailLat = 0.0;
+    private double trailLng = 0.0;
     private boolean hasLocation = false;
     private boolean isRunning = false;
+
+    private final List<String> activeOrderIds = new ArrayList<>();
+    private final List<Map<String, Object>> recentRoute = new ArrayList<>();
+    private final Set<String> knownOrderIds = new HashSet<>();
+    private boolean ordersInitialized = false;
+
+    private DatabaseReference ordersRef;
+    private ValueEventListener ordersListener;
 
     private final Runnable syncTask = new Runnable() {
         @Override
@@ -77,31 +91,19 @@ public class LocationForegroundService extends Service implements LocationListen
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && ACTION_STOP.equals(intent.getAction())) {
-            saveActiveState(false);
             stopSelfCleanly();
             return START_NOT_STICKY;
         }
 
-        SharedPreferences prefs = getSharedPreferences("rider_gps_prefs", MODE_PRIVATE);
-        if (intent != null && intent.hasExtra("uid")) {
-            prefs.edit()
-                    .putString("uid", intent.getStringExtra("uid"))
-                    .putString("idToken", intent.getStringExtra("idToken"))
-                    .putString("refreshToken", intent.getStringExtra("refreshToken"))
-                    .putString("apiKey", intent.getStringExtra("apiKey"))
-                    .putString("dbUrl", intent.getStringExtra("dbUrl"))
-                    .putString("activeOrderIds", intent.getStringExtra("activeOrderIds"))
-                    .putBoolean("tracking", true)
-                    .apply();
-        }
-
-        if (!prefs.getBoolean("tracking", false)) {
+        FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+        if (user == null) {
             stopSelf();
             return START_NOT_STICKY;
         }
 
         startForegroundNotification();
         startLocationUpdates();
+        attachBackgroundOrderWatcher(user.getUid());
 
         if (wakeLock != null && !wakeLock.isHeld()) {
             wakeLock.acquire(10 * 60 * 60 * 1000L);
@@ -116,24 +118,22 @@ public class LocationForegroundService extends Service implements LocationListen
         return START_STICKY;
     }
 
-    private void saveActiveState(boolean active) {
-        getSharedPreferences("rider_gps_prefs", MODE_PRIVATE)
-                .edit().putBoolean("tracking", active).apply();
-    }
-
     private void startForegroundNotification() {
         NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && nm != null) {
-            NotificationChannel ch = new NotificationChannel(
-                    CHANNEL_ID, "Rider Live GPS", NotificationManager.IMPORTANCE_LOW);
+            NotificationChannel ch = new NotificationChannel(CHANNEL_GPS, "Rider Live GPS", NotificationManager.IMPORTANCE_LOW);
             nm.createNotificationChannel(ch);
+
+            NotificationChannel ordCh = new NotificationChannel(CHANNEL_ORDER, "New Order Alerts", NotificationManager.IMPORTANCE_HIGH);
+            ordCh.enableVibration(true);
+            ordCh.setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION), null);
+            nm.createNotificationChannel(ordCh);
         }
 
         Intent openIntent = new Intent(this, MainActivity.class);
-        PendingIntent pi = PendingIntent.getActivity(this, 0, openIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        PendingIntent pi = PendingIntent.getActivity(this, 0, openIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
-        Notification notif = new NotificationCompat.Builder(this, CHANNEL_ID)
+        Notification notif = new NotificationCompat.Builder(this, CHANNEL_GPS)
                 .setContentTitle("Gossaigaon Rider Online")
                 .setContentText("Live GPS har 5 second me update ho rahi hai")
                 .setSmallIcon(R.drawable.ic_rider)
@@ -141,11 +141,66 @@ public class LocationForegroundService extends Service implements LocationListen
                 .setOngoing(true)
                 .build();
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION);
-        } else {
-            startForeground(NOTIF_ID, notif);
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIF_GPS_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION);
+            } else {
+                startForeground(NOTIF_GPS_ID, notif);
+            }
+        } catch (SecurityException ignored) {
+            stopSelf();
         }
+    }
+
+    private void attachBackgroundOrderWatcher(String uid) {
+        if (ordersListener != null) return;
+        ordersRef = FirebaseDatabase.getInstance().getReference("orders");
+        ordersListener = new ValueEventListener() {
+            @Override
+            public void onDataChange(@NonNull DataSnapshot snapshot) {
+                activeOrderIds.clear();
+                boolean hasBrandNewUnaccepted = false;
+                for (DataSnapshot ds : snapshot.getChildren()) {
+                    String dUid = TripHelper.getStr(ds, "deliveryUid", "");
+                    String status = TripHelper.getStr(ds, "status", "PLACED");
+                    if (uid.equals(dUid) && !"DELIVERED".equals(status) && !"CANCELLED".equals(status)) {
+                        String oid = ds.getKey();
+                        if (oid != null) {
+                            activeOrderIds.add(oid);
+                            if (ordersInitialized && !knownOrderIds.contains(oid)) {
+                                hasBrandNewUnaccepted = true;
+                            }
+                            knownOrderIds.add(oid);
+                        }
+                    }
+                }
+                ordersInitialized = true;
+                if (hasBrandNewUnaccepted) {
+                    showNewOrderAlertNotification();
+                }
+            }
+
+            @Override
+            public void onCancelled(@NonNull DatabaseError error) {}
+        };
+        ordersRef.addValueEventListener(ordersListener);
+    }
+
+    private void showNewOrderAlertNotification() {
+        NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm == null) return;
+        Intent openIntent = new Intent(this, MainActivity.class);
+        PendingIntent pi = PendingIntent.getActivity(this, 1, openIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        Notification n = new NotificationCompat.Builder(this, CHANNEL_ORDER)
+                .setContentTitle("🔔 New Grocery Trip Assigned!")
+                .setContentText("Jaldi app kholkar Accept karein!")
+                .setSmallIcon(R.drawable.ic_rider)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION))
+                .setContentIntent(pi)
+                .build();
+        nm.notify(NOTIF_ORDER_ID, n);
     }
 
     private void startLocationUpdates() {
@@ -188,113 +243,51 @@ public class LocationForegroundService extends Service implements LocationListen
 
     private void pushLocationToFirebase() {
         if (!hasLocation) return;
-        final double lat = lastLat;
-        final double lng = lastLng;
+        FirebaseUser user = FirebaseAuth.getInstance().getCurrentUser();
+        if (user == null) return;
 
-        executor.execute(() -> {
-            SharedPreferences prefs = getSharedPreferences("rider_gps_prefs", MODE_PRIVATE);
-            String uid = prefs.getString("uid", "");
-            String idToken = prefs.getString("idToken", "");
-            String refreshToken = prefs.getString("refreshToken", "");
-            String apiKey = prefs.getString("apiKey", "");
-            String dbUrl = prefs.getString("dbUrl", "");
-            String orderIdsCsv = prefs.getString("activeOrderIds", "");
+        long now = System.currentTimeMillis();
+        DatabaseReference db = FirebaseDatabase.getInstance().getReference();
 
-            if (uid.isEmpty() || dbUrl.isEmpty() || idToken.isEmpty()) return;
+        Map<String, Object> riderMap = new HashMap<>();
+        riderMap.put("lat", lastLat);
+        riderMap.put("lng", lastLng);
+        riderMap.put("online", true);
+        riderMap.put("lastSeen", now);
+        riderMap.put("lastLocationUpdate", now);
 
-            long now = System.currentTimeMillis();
-            try {
-                JSONObject riderBody = new JSONObject();
-                riderBody.put("lat", lat);
-                riderBody.put("lng", lng);
-                riderBody.put("online", true);
-                riderBody.put("lastSeen", now);
-                riderBody.put("lastLocationUpdate", now);
-
-                int code = sendFirebasePatch(dbUrl + "/deliveryPartners/" + uid + ".json?auth=" + idToken, riderBody.toString());
-                if (code == 401 && !refreshToken.isEmpty() && !apiKey.isEmpty()) {
-                    String newToken = refreshFirebaseIdToken(apiKey, refreshToken, prefs);
-                    if (newToken != null) {
-                        idToken = newToken;
-                        sendFirebasePatch(dbUrl + "/deliveryPartners/" + uid + ".json?auth=" + idToken, riderBody.toString());
-                    }
-                }
-
-                if (!orderIdsCsv.isEmpty()) {
-                    JSONObject orderBody = new JSONObject();
-                    orderBody.put("riderLat", lat);
-                    orderBody.put("riderLng", lng);
-                    orderBody.put("lastLocationUpdate", now);
-                    String[] ids = orderIdsCsv.split(",");
-                    for (String oid : ids) {
-                        String cleanId = oid.trim();
-                        if (!cleanId.isEmpty()) {
-                            sendFirebasePatch(dbUrl + "/orders/" + cleanId + ".json?auth=" + idToken, orderBody.toString());
-                        }
-                    }
-                }
-            } catch (Exception ignored) {}
-        });
-    }
-
-    private int sendFirebasePatch(String targetUrl, String jsonPayload) {
-        HttpURLConnection conn = null;
-        try {
-            URL url = new URL(targetUrl);
-            conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("POST");
-            conn.setRequestProperty("X-HTTP-Method-Override", "PATCH");
-            conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
-            conn.setConnectTimeout(4000);
-            conn.setReadTimeout(4000);
-            conn.setDoOutput(true);
-            try (OutputStream os = conn.getOutputStream()) {
-                os.write(jsonPayload.getBytes(StandardCharsets.UTF_8));
-            }
-            return conn.getResponseCode();
-        } catch (Exception e) {
-            return -1;
-        } finally {
-            if (conn != null) conn.disconnect();
+        double moved = TripHelper.calculateDistanceKm(trailLat, trailLng, lastLat, lastLng);
+        if (trailLat == 0.0 || moved < 0 || moved >= 0.015) {
+            Map<String, Object> pt = new HashMap<>();
+            pt.put("lat", lastLat);
+            pt.put("lng", lastLng);
+            pt.put("time", now);
+            recentRoute.add(pt);
+            if (recentRoute.size() > 20) recentRoute.remove(0);
+            riderMap.put("recentRoute", new ArrayList<>(recentRoute));
+            trailLat = lastLat;
+            trailLng = lastLng;
         }
-    }
 
-    private String refreshFirebaseIdToken(String apiKey, String refreshToken, SharedPreferences prefs) {
-        HttpURLConnection conn = null;
-        try {
-            URL url = new URL("https://securetoken.googleapis.com/v1/token?key=" + apiKey);
-            conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("POST");
-            conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
-            conn.setDoOutput(true);
-            String body = "grant_type=refresh_token&refresh_token=" + URLEncoder.encode(refreshToken, "UTF-8");
-            try (OutputStream os = conn.getOutputStream()) {
-                os.write(body.getBytes(StandardCharsets.UTF_8));
-            }
-            if (conn.getResponseCode() == 200) {
-                BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()));
-                StringBuilder sb = new StringBuilder();
-                String line;
-                while ((line = br.readLine()) != null) sb.append(line);
-                JSONObject res = new JSONObject(sb.toString());
-                String newIdToken = res.optString("id_token", "");
-                String newRefresh = res.optString("refresh_token", refreshToken);
-                if (!newIdToken.isEmpty()) {
-                    prefs.edit().putString("idToken", newIdToken).putString("refreshToken", newRefresh).apply();
-                    return newIdToken;
-                }
-            }
-        } catch (Exception ignored) {
-        } finally {
-            if (conn != null) conn.disconnect();
+        db.child("deliveryPartners").child(user.getUid()).updateChildren(riderMap);
+
+        Map<String, Object> orderLoc = new HashMap<>();
+        orderLoc.put("riderLat", lastLat);
+        orderLoc.put("riderLng", lastLng);
+        orderLoc.put("lastLocationUpdate", now);
+        for (String oid : new ArrayList<>(activeOrderIds)) {
+            db.child("orders").child(oid).updateChildren(orderLoc);
         }
-        return null;
     }
 
     private void stopSelfCleanly() {
         isRunning = false;
         handler.removeCallbacks(syncTask);
         if (locationManager != null) locationManager.removeUpdates(this);
+        if (ordersRef != null && ordersListener != null) {
+            ordersRef.removeEventListener(ordersListener);
+            ordersListener = null;
+        }
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
         stopForeground(true);
         stopSelf();
@@ -305,8 +298,11 @@ public class LocationForegroundService extends Service implements LocationListen
         isRunning = false;
         handler.removeCallbacks(syncTask);
         if (locationManager != null) locationManager.removeUpdates(this);
+        if (ordersRef != null && ordersListener != null) {
+            ordersRef.removeEventListener(ordersListener);
+            ordersListener = null;
+        }
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
-        executor.shutdownNow();
         super.onDestroy();
     }
 
