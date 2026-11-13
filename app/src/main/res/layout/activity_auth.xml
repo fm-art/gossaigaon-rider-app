@@ -1,0 +1,222 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#050811"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <ImageView
+            android:layout_width="64dp"
+            android:layout_height="64dp"
+            android:layout_gravity="center_horizontal"
+            android:src="@drawable/ic_rider" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginTop="10dp"
+            android:text="Gossaigaon Fleet"
+            android:textColor="#F8FAFC"
+            android:textSize="26sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginBottom="22dp"
+            android:text="Native Multi-Store &amp; 5s GPS Terminal"
+            android:textColor="#94A3B8"
+            android:textSize="13sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="18dp"
+            android:background="#0F172A"
+            android:orientation="horizontal"
+            android:padding="4dp">
+
+            <TextView
+                android:id="@+id/tabLogin"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:background="#16A34A"
+                android:gravity="center"
+                android:padding="11dp"
+                android:text="Sign In"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tabSignup"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:padding="11dp"
+                android:text="Register Rider"
+                android:textColor="#94A3B8"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <!-- LOGIN LAYOUT -->
+        <LinearLayout
+            android:id="@+id/layoutLogin"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <EditText
+                android:id="@+id/etLoginEmail"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="12dp"
+                android:background="#0F172A"
+                android:hint="Registered Email"
+                android:inputType="textEmailAddress"
+                android:padding="14dp"
+                android:textColor="#FFFFFF"
+                android:textColorHint="#64748B" />
+
+            <EditText
+                android:id="@+id/etLoginPassword"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="16dp"
+                android:background="#0F172A"
+                android:hint="Password"
+                android:inputType="textPassword"
+                android:padding="14dp"
+                android:textColor="#FFFFFF"
+                android:textColorHint="#64748B" />
+
+            <Button
+                android:id="@+id/btnLogin"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:backgroundTint="#16A34A"
+                android:text="Start Protected Shift"
+                android:textAllCaps="false"
+                android:textColor="#FFFFFF"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <!-- SIGNUP LAYOUT -->
+        <LinearLayout
+            android:id="@+id/layoutSignup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <EditText
+                android:id="@+id/etRegName"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="10dp"
+                android:background="#0F172A"
+                android:hint="Rider Full Name"
+                android:padding="13dp"
+                android:textColor="#FFFFFF"
+                android:textColorHint="#64748B" />
+
+            <EditText
+                android:id="@+id/etRegEmail"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="10dp"
+                android:background="#0F172A"
+                android:hint="Email Address"
+                android:inputType="textEmailAddress"
+                android:padding="13dp"
+                android:textColor="#FFFFFF"
+                android:textColorHint="#64748B" />
+
+            <EditText
+                android:id="@+id/etRegPhone"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="10dp"
+                android:background="#0F172A"
+                android:hint="10-Digit Mobile Number"
+                android:inputType="phone"
+                android:maxLength="10"
+                android:padding="13dp"
+                android:textColor="#FFFFFF"
+                android:textColorHint="#64748B" />
+
+            <EditText
+                android:id="@+id/etRegUpi"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="10dp"
+                android:background="#0F172A"
+                android:hint="UPI ID (e.g. 9876543210@paytm)"
+                android:padding="13dp"
+                android:textColor="#FFFFFF"
+                android:textColorHint="#64748B" />
+
+            <EditText
+                android:id="@+id/etRegVehicle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="10dp"
+                android:background="#0F172A"
+                android:hint="Vehicle (e.g. Hero Splendor AS-16)"
+                android:padding="13dp"
+                android:textColor="#FFFFFF"
+                android:textColorHint="#64748B" />
+
+            <EditText
+                android:id="@+id/etRegPassword"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="14dp"
+                android:background="#0F172A"
+                android:hint="Create Password (min 6 chars)"
+                android:inputType="textPassword"
+                android:padding="13dp"
+                android:textColor="#FFFFFF"
+                android:textColorHint="#64748B" />
+
+            <Button
+                android:id="@+id/btnSignup"
+                android:layout_width="match_parent"
+                android:layout_height="52dp"
+                android:backgroundTint="#16A34A"
+                android:text="Register Rider Account"
+                android:textAllCaps="false"
+                android:textColor="#FFFFFF"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <ProgressBar
+            android:id="@+id/progressAuth"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal"
+            android:layout_marginTop="12dp"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/tvAuthError"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:gravity="center"
+            android:textColor="#EF4444"
+            android:textSize="13sp" />
+    </LinearLayout>
+</ScrollView>
