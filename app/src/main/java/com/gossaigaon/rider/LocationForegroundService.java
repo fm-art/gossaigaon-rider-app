@@ -13,7 +13,9 @@ import android.content.pm.ServiceInfo;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
+import android.media.AudioAttributes;
 import android.media.RingtoneManager;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
@@ -35,36 +37,30 @@ import com.google.firebase.database.ValueEventListener;
 
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 public class LocationForegroundService extends Service implements LocationListener {
 
     public static final String ACTION_START = "ACTION_START";
     public static final String ACTION_STOP = "ACTION_STOP";
     private static final String CHANNEL_GPS = "gossaigaon_rider_gps";
-    private static final String CHANNEL_ORDER = "gossaigaon_new_order";
+    private static final String CHANNEL_ORDER = "gossaigaon_new_order_ring";
     private static final int NOTIF_GPS_ID = 777;
-    private static final int NOTIF_ORDER_ID = 888;
+    public static final int NOTIF_ORDER_ID = 888;
     private static final long SYNC_INTERVAL_MS = 5000L;
 
     private LocationManager locationManager;
     private PowerManager.WakeLock wakeLock;
     private final Handler handler = new Handler(Looper.getMainLooper());
 
-    private double lastLat = 0.0;
-    private double lastLng = 0.0;
-    private double trailLat = 0.0;
-    private double trailLng = 0.0;
-    private boolean hasLocation = false;
-    private boolean isRunning = false;
+    private double lastLat = 0.0, lastLng = 0.0;
+    private double trailLat = 0.0, trailLng = 0.0;
+    private boolean hasLocation = false, isRunning = false;
+    private boolean isInsistentNotifShowing = false;
 
     private final List<String> activeOrderIds = new ArrayList<>();
     private final List<Map<String, Object>> recentRoute = new ArrayList<>();
-    private final Set<String> knownOrderIds = new HashSet<>();
-    private boolean ordersInitialized = false;
 
     private DatabaseReference ordersRef;
     private ValueEventListener ordersListener;
@@ -124,9 +120,16 @@ public class LocationForegroundService extends Service implements LocationListen
             NotificationChannel ch = new NotificationChannel(CHANNEL_GPS, "Rider Live GPS", NotificationManager.IMPORTANCE_LOW);
             nm.createNotificationChannel(ch);
 
-            NotificationChannel ordCh = new NotificationChannel(CHANNEL_ORDER, "New Order Alerts", NotificationManager.IMPORTANCE_HIGH);
+            Uri ringUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
+            if (ringUri == null) ringUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
+
+            NotificationChannel ordCh = new NotificationChannel(CHANNEL_ORDER, "New Order Ringtone", NotificationManager.IMPORTANCE_HIGH);
             ordCh.enableVibration(true);
-            ordCh.setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION), null);
+            ordCh.setVibrationPattern(new long[]{0, 600, 300, 600});
+            ordCh.setSound(ringUri, new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build());
             nm.createNotificationChannel(ordCh);
         }
 
@@ -159,24 +162,27 @@ public class LocationForegroundService extends Service implements LocationListen
             @Override
             public void onDataChange(@NonNull DataSnapshot snapshot) {
                 activeOrderIds.clear();
-                boolean hasBrandNewUnaccepted = false;
+                boolean hasUnacceptedOrder = false;
+
                 for (DataSnapshot ds : snapshot.getChildren()) {
                     String dUid = TripHelper.getStr(ds, "deliveryUid", "");
                     String status = TripHelper.getStr(ds, "status", "PLACED");
                     if (uid.equals(dUid) && !"DELIVERED".equals(status) && !"CANCELLED".equals(status)) {
                         String oid = ds.getKey();
-                        if (oid != null) {
-                            activeOrderIds.add(oid);
-                            if (ordersInitialized && !knownOrderIds.contains(oid)) {
-                                hasBrandNewUnaccepted = true;
-                            }
-                            knownOrderIds.add(oid);
+                        if (oid != null) activeOrderIds.add(oid);
+                        Object acc = ds.child("riderAccepted").getValue();
+                        if (!(acc instanceof Boolean && (Boolean) acc)) {
+                            hasUnacceptedOrder = true;
                         }
                     }
                 }
-                ordersInitialized = true;
-                if (hasBrandNewUnaccepted) {
-                    showNewOrderAlertNotification();
+
+                if (hasUnacceptedOrder && !MainActivity.isAppInForeground) {
+                    if (!isInsistentNotifShowing) {
+                        showInsistentOrderNotification();
+                    }
+                } else {
+                    cancelOrderNotification();
                 }
             }
 
@@ -186,21 +192,38 @@ public class LocationForegroundService extends Service implements LocationListen
         ordersRef.addValueEventListener(ordersListener);
     }
 
-    private void showNewOrderAlertNotification() {
+    private void showInsistentOrderNotification() {
         NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm == null) return;
+        isInsistentNotifShowing = true;
+
         Intent openIntent = new Intent(this, MainActivity.class);
         PendingIntent pi = PendingIntent.getActivity(this, 1, openIntent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+        Uri ringUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
+        if (ringUri == null) ringUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
+
         Notification n = new NotificationCompat.Builder(this, CHANNEL_ORDER)
                 .setContentTitle("🔔 New Grocery Trip Assigned!")
-                .setContentText("Jaldi app kholkar Accept karein!")
+                .setContentText("Accept karne ke liye tap karein!")
                 .setSmallIcon(R.drawable.ic_rider)
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setPriority(NotificationCompat.PRIORITY_MAX)
+                .setCategory(NotificationCompat.CATEGORY_CALL)
                 .setAutoCancel(true)
-                .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION))
+                .setSound(ringUri)
+                .setVibrate(new long[]{0, 600, 300, 600})
                 .setContentIntent(pi)
                 .build();
+
+        // FLAG_INSISTENT keeps ringing continuously until user opens/clears it
+        n.flags |= Notification.FLAG_INSISTENT;
         nm.notify(NOTIF_ORDER_ID, n);
+    }
+
+    private void cancelOrderNotification() {
+        isInsistentNotifShowing = false;
+        NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm != null) nm.cancel(NOTIF_ORDER_ID);
     }
 
     private void startLocationUpdates() {
@@ -283,6 +306,7 @@ public class LocationForegroundService extends Service implements LocationListen
     private void stopSelfCleanly() {
         isRunning = false;
         handler.removeCallbacks(syncTask);
+        cancelOrderNotification();
         if (locationManager != null) locationManager.removeUpdates(this);
         if (ordersRef != null && ordersListener != null) {
             ordersRef.removeEventListener(ordersListener);
@@ -297,6 +321,7 @@ public class LocationForegroundService extends Service implements LocationListen
     public void onDestroy() {
         isRunning = false;
         handler.removeCallbacks(syncTask);
+        cancelOrderNotification();
         if (locationManager != null) locationManager.removeUpdates(this);
         if (ordersRef != null && ordersListener != null) {
             ordersRef.removeEventListener(ordersListener);
