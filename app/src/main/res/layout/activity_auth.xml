@@ -13,8 +13,8 @@
         android:padding="24dp">
 
         <ImageView
-            android:layout_width="64dp"
-            android:layout_height="64dp"
+            android:layout_width="68dp"
+            android:layout_height="68dp"
             android:layout_gravity="center_horizontal"
             android:src="@drawable/ic_rider" />
 
@@ -25,22 +25,23 @@
             android:layout_marginTop="10dp"
             android:text="Gossaigaon Fleet"
             android:textColor="#F8FAFC"
-            android:textSize="26sp"
+            android:textSize="27sp"
             android:textStyle="bold" />
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="center_horizontal"
-            android:layout_marginBottom="22dp"
-            android:text="Native Multi-Store &amp; 5s GPS Terminal"
+            android:layout_marginBottom="24dp"
+            android:text="🛡️ Multi-Store &amp; Turn-By-Turn GPS Terminal"
             android:textColor="#94A3B8"
             android:textSize="13sp" />
 
         <LinearLayout
+            android:id="@+id/layoutAuthTabs"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="18dp"
+            android:layout_marginBottom="20dp"
             android:background="#0F172A"
             android:orientation="horizontal"
             android:padding="4dp">
@@ -50,9 +51,8 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:background="#16A34A"
                 android:gravity="center"
-                android:padding="11dp"
+                android:padding="12dp"
                 android:text="Sign In"
                 android:textColor="#FFFFFF"
                 android:textStyle="bold" />
@@ -63,7 +63,7 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:gravity="center"
-                android:padding="11dp"
+                android:padding="12dp"
                 android:text="Register Rider"
                 android:textColor="#94A3B8"
                 android:textStyle="bold" />
@@ -76,25 +76,41 @@
             android:layout_height="wrap_content"
             android:orientation="vertical">
 
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="5dp"
+                android:text="REGISTERED EMAIL"
+                android:textColor="#94A3B8"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+
             <EditText
                 android:id="@+id/etLoginEmail"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="12dp"
-                android:background="#0F172A"
-                android:hint="Registered Email"
+                android:layout_marginBottom="14dp"
+                android:hint="rider@gossaigaonbazar.com"
                 android:inputType="textEmailAddress"
                 android:padding="14dp"
                 android:textColor="#FFFFFF"
                 android:textColorHint="#64748B" />
 
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="5dp"
+                android:text="PASSWORD"
+                android:textColor="#94A3B8"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+
             <EditText
                 android:id="@+id/etLoginPassword"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="16dp"
-                android:background="#0F172A"
-                android:hint="Password"
+                android:layout_marginBottom="18dp"
+                android:hint="••••••••"
                 android:inputType="textPassword"
                 android:padding="14dp"
                 android:textColor="#FFFFFF"
@@ -104,8 +120,7 @@
                 android:id="@+id/btnLogin"
                 android:layout_width="match_parent"
                 android:layout_height="52dp"
-                android:backgroundTint="#16A34A"
-                android:text="Start Protected Shift"
+                android:text="🛡️ Start Protected Shift"
                 android:textAllCaps="false"
                 android:textColor="#FFFFFF"
                 android:textSize="15sp"
@@ -125,7 +140,6 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="10dp"
-                android:background="#0F172A"
                 android:hint="Rider Full Name"
                 android:padding="13dp"
                 android:textColor="#FFFFFF"
@@ -136,7 +150,6 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="10dp"
-                android:background="#0F172A"
                 android:hint="Email Address"
                 android:inputType="textEmailAddress"
                 android:padding="13dp"
@@ -148,7 +161,6 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="10dp"
-                android:background="#0F172A"
                 android:hint="10-Digit Mobile Number"
                 android:inputType="phone"
                 android:maxLength="10"
@@ -161,7 +173,6 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="10dp"
-                android:background="#0F172A"
                 android:hint="UPI ID (e.g. 9876543210@paytm)"
                 android:padding="13dp"
                 android:textColor="#FFFFFF"
@@ -172,7 +183,6 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="10dp"
-                android:background="#0F172A"
                 android:hint="Vehicle (e.g. Hero Splendor AS-16)"
                 android:padding="13dp"
                 android:textColor="#FFFFFF"
@@ -182,8 +192,7 @@
                 android:id="@+id/etRegPassword"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginBottom="14dp"
-                android:background="#0F172A"
+                android:layout_marginBottom="16dp"
                 android:hint="Create Password (min 6 chars)"
                 android:inputType="textPassword"
                 android:padding="13dp"
@@ -194,8 +203,7 @@
                 android:id="@+id/btnSignup"
                 android:layout_width="match_parent"
                 android:layout_height="52dp"
-                android:backgroundTint="#16A34A"
-                android:text="Register Rider Account"
+                android:text="🪪 Register Rider Account"
                 android:textAllCaps="false"
                 android:textColor="#FFFFFF"
                 android:textSize="15sp"
