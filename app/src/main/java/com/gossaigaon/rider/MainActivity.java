@@ -2,9 +2,13 @@ package com.gossaigaon.rider;
 
 import android.Manifest;
 import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.Typeface;
 import android.media.Ringtone;
 import android.media.RingtoneManager;
 import android.net.Uri;
@@ -16,11 +20,13 @@ import android.provider.Settings;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextWatcher;
+import android.view.Gravity;
 import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
@@ -52,7 +58,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
-public class MainActivity extends AppCompatActivity {
+public class MainActivity extends AppCompatActivity implements RiderUiKit.TripActionListener {
 
     private static final int REQ_PERMS = 201;
 
@@ -60,10 +66,10 @@ public class MainActivity extends AppCompatActivity {
     private DatabaseReference db;
     private FirebaseUser currentUser;
 
-    private TextView tvSuspendedBanner, tvPersonalNotice, tvBroadcastBanner, tvApprovalBanner, tvCashLimitBanner;
+    private TextView tvSuspendedBanner, tvPersonalNotice, tvBroadcastBanner, tvApprovalBanner, tvCashLimitText;
     private TextView tvRiderName, tvRiderVehicle, tvRiderRating, tvDutyLabel, tvGpsSyncTime, tvActiveCount;
-    private View dotOnline, layoutGpsBar;
-    private Button btnSoundToggle;
+    private View dotOnline, layoutGpsBar, layoutCashLimitBanner, btnDutyToggle;
+    private Button btnSoundToggle, btnBannerDeposit;
 
     private ScrollView scrollActive, scrollEarnings, scrollProfile;
     private TextView tvNavActive, tvNavEarnings, tvNavProfile;
@@ -72,18 +78,16 @@ public class MainActivity extends AppCompatActivity {
     private TextView tvAvailableEarnings, tvHeroUpi, tvPayoutLimits, tvTotalCommission, tvPaidByAdmin;
     private TextView tvCodCashLabel, tvCodCashInHand, tvCodDepositLimits, tvTotalCodCollected, tvSettledToAdmin, tvRatingsSummary;
     private TextView tvHelplineHours;
-    private Button btnCallHub, btnWaHub;
+    private Button btnCallHub, btnWaHub, btnSendFeedback, btnSaveProfile, btnLogout, btnWithdrawEarnings, btnDepositCod;
     private EditText etProfName, etProfEmail, etProfPhone, etProfUpi, etProfVehicle;
 
     private int activeTabIndex = 0;
-    private boolean soundEnabled = true;
-    private boolean gpsServiceActive = false;
+    private boolean soundEnabled = true, gpsServiceActive = false;
     private boolean riderApproved = false, riderOnline = false, riderSuspended = false;
     private String riderName = "Gossaigaon Rider", riderPhone = "", riderUpi = "", riderVehicle = "Bike";
     private double riderLat = 26.4524, riderLng = 89.9723;
 
-    private String adminUpiId = "gossaigaonbazar@apl";
-    private String supportPhone = "", supportWhatsapp = "";
+    private String adminUpiId = "gossaigaonbazar@apl", supportPhone = "", supportWhatsapp = "";
     private double baseRiderFee = 25, maxCashLimit = 3000;
     private double minRiderPayout = 10, maxRiderPayout = 10000;
     private double minRiderCodDeposit = 10, maxRiderCodDeposit = 25000;
@@ -91,6 +95,7 @@ public class MainActivity extends AppCompatActivity {
     private boolean allowRiderPass = true, allowRiderSos = true;
 
     private double netCashInHand = 0, availablePayoutBalance = 0;
+    private double approvedSettlementsTotal = 0, paidPayoutsTotal = 0;
     private int prevActiveCount = -1;
 
     private final Map<String, TripHelper.StoreData> storesMap = new HashMap<>();
@@ -98,13 +103,12 @@ public class MainActivity extends AppCompatActivity {
     private final List<TripHelper.OrderData> myCompletedOrders = new ArrayList<>();
     private final List<String> allExistingUtrs = new ArrayList<>();
     private final Map<String, TextView> timerViews = new HashMap<>();
+    private final Map<String, ProgressBar> timerBars = new HashMap<>();
     private final Set<String> timedOutTrips = new HashSet<>();
     private final Map<String, Integer> pinFailCounts = new HashMap<>();
     private final Map<String, Long> pinLockUntil = new HashMap<>();
 
-    private double approvedSettlementsTotal = 0, paidPayoutsTotal = 0;
     private final Handler timerHandler = new Handler(Looper.getMainLooper());
-
     private final Runnable countdownTask = new Runnable() {
         @Override
         public void run() {
@@ -127,6 +131,7 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
 
         bindViews();
+        applyNativeTheme();
         setupNavAndClicks();
         requestLocationPermissions();
         attachFirebaseListeners();
@@ -135,11 +140,8 @@ public class MainActivity extends AppCompatActivity {
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override
             public void handleOnBackPressed() {
-                if (activeTabIndex != 0) {
-                    switchTab(0);
-                } else {
-                    moveTaskToBack(true);
-                }
+                if (activeTabIndex != 0) switchTab(0);
+                else moveTaskToBack(true);
             }
         });
     }
@@ -149,12 +151,15 @@ public class MainActivity extends AppCompatActivity {
         tvPersonalNotice = findViewById(R.id.tvPersonalNotice);
         tvBroadcastBanner = findViewById(R.id.tvBroadcastBanner);
         tvApprovalBanner = findViewById(R.id.tvApprovalBanner);
-        tvCashLimitBanner = findViewById(R.id.tvCashLimitBanner);
+        layoutCashLimitBanner = findViewById(R.id.layoutCashLimitBanner);
+        tvCashLimitText = findViewById(R.id.tvCashLimitText);
+        btnBannerDeposit = findViewById(R.id.btnBannerDeposit);
 
         tvRiderName = findViewById(R.id.tvRiderName);
         tvRiderVehicle = findViewById(R.id.tvRiderVehicle);
         tvRiderRating = findViewById(R.id.tvRiderRating);
         btnSoundToggle = findViewById(R.id.btnSoundToggle);
+        btnDutyToggle = findViewById(R.id.btnDutyToggle);
         dotOnline = findViewById(R.id.dotOnline);
         tvDutyLabel = findViewById(R.id.tvDutyLabel);
         layoutGpsBar = findViewById(R.id.layoutGpsBar);
@@ -180,22 +185,55 @@ public class MainActivity extends AppCompatActivity {
         tvPayoutLimits = findViewById(R.id.tvPayoutLimits);
         tvTotalCommission = findViewById(R.id.tvTotalCommission);
         tvPaidByAdmin = findViewById(R.id.tvPaidByAdmin);
+        btnWithdrawEarnings = findViewById(R.id.btnWithdrawEarnings);
+
         tvCodCashLabel = findViewById(R.id.tvCodCashLabel);
         tvCodCashInHand = findViewById(R.id.tvCodCashInHand);
         tvCodDepositLimits = findViewById(R.id.tvCodDepositLimits);
         tvTotalCodCollected = findViewById(R.id.tvTotalCodCollected);
         tvSettledToAdmin = findViewById(R.id.tvSettledToAdmin);
+        btnDepositCod = findViewById(R.id.btnDepositCod);
         tvRatingsSummary = findViewById(R.id.tvRatingsSummary);
 
         tvHelplineHours = findViewById(R.id.tvHelplineHours);
         btnCallHub = findViewById(R.id.btnCallHub);
         btnWaHub = findViewById(R.id.btnWaHub);
+        btnSendFeedback = findViewById(R.id.btnSendFeedback);
 
         etProfName = findViewById(R.id.etProfName);
         etProfEmail = findViewById(R.id.etProfEmail);
         etProfPhone = findViewById(R.id.etProfPhone);
         etProfUpi = findViewById(R.id.etProfUpi);
         etProfVehicle = findViewById(R.id.etProfVehicle);
+        btnSaveProfile = findViewById(R.id.btnSaveProfile);
+        btnLogout = findViewById(R.id.btnLogout);
+    }
+
+    private void applyNativeTheme() {
+        findViewById(R.id.layoutRiderAvatar).setBackground(RiderUiKit.makeBox(this, "#142824", "#16A34A", 1.2f, 14, false));
+        tvRiderRating.setBackground(RiderUiKit.makeBox(this, "#291E0B", "#785312", 1f, 8, false));
+        btnSoundToggle.setBackground(RiderUiKit.makeBox(this, "#172238", "#24344D", 1.2f, 10, false));
+        btnDutyToggle.setBackground(RiderUiKit.makeBox(this, "#090E1A", "#24344D", 1.2f, 20, false));
+        tvActiveCount.setBackground(RiderUiKit.makeBox(this, "#202D45", "#24344D", 1f, 12, false));
+        btnBannerDeposit.setBackground(RiderUiKit.makeBox(this, "#EF4444", "#EF4444", 0f, 10, false));
+
+        findViewById(R.id.cardEarningsHero).setBackground(RiderUiKit.makeGradient(this, "#0E2A47", "#0B192E", "#38BDF8", 1.5f, 20));
+        findViewById(R.id.cardCodHero).setBackground(RiderUiKit.makeGradient(this, "#172238", "#0F172A", "#24344D", 1.2f, 20));
+        findViewById(R.id.cardRatings).setBackground(RiderUiKit.makeBox(this, "#0F172A", "#785312", 1f, 18, false));
+        btnWithdrawEarnings.setBackground(RiderUiKit.makeBox(this, "#0284C7", "#0284C7", 0f, 12, false));
+        btnDepositCod.setBackground(RiderUiKit.makeBox(this, "#16A34A", "#16A34A", 0f, 12, false));
+
+        findViewById(R.id.cardHelpline).setBackground(RiderUiKit.makeBox(this, "#0F172A", "#38BDF8", 1f, 16, false));
+        findViewById(R.id.cardProfileForm).setBackground(RiderUiKit.makeBox(this, "#0F172A", "#24344D", 1f, 18, false));
+        btnCallHub.setBackground(RiderUiKit.makeBox(this, "#172238", "#24344D", 1.2f, 10, false));
+        btnWaHub.setBackground(RiderUiKit.makeBox(this, "#10B981", "#10B981", 0f, 10, false));
+        btnSendFeedback.setBackground(RiderUiKit.makeBox(this, "#0F172A", "#38BDF8", 1.2f, 10, false));
+        btnSaveProfile.setBackground(RiderUiKit.makeBox(this, "#16A34A", "#16A34A", 0f, 14, false));
+        btnLogout.setBackground(RiderUiKit.makeBox(this, "#0F172A", "#EF4444", 1.5f, 14, false));
+
+        EditText[] inputs = {etProfName, etProfEmail, etProfPhone, etProfVehicle};
+        for (EditText et : inputs) et.setBackground(RiderUiKit.makeBox(this, "#050811", "#24344D", 1.3f, 12, false));
+        etProfUpi.setBackground(RiderUiKit.makeBox(this, "#050811", "#38BDF8", 1.3f, 12, false));
     }
 
     private void setupNavAndClicks() {
@@ -206,18 +244,19 @@ public class MainActivity extends AppCompatActivity {
         btnSoundToggle.setOnClickListener(v -> {
             soundEnabled = !soundEnabled;
             btnSoundToggle.setText(soundEnabled ? "🔊" : "🔇");
-            toast(soundEnabled ? "Trip alert sound ON" : "Trip alert sound MUTED");
+            toast(soundEnabled ? "Trip chime: ON" : "Trip chime: MUTED");
         });
 
-        findViewById(R.id.btnDutyToggle).setOnClickListener(v -> toggleDuty());
-        findViewById(R.id.btnWithdrawEarnings).setOnClickListener(v -> showWithdrawDialog());
-        findViewById(R.id.btnDepositCod).setOnClickListener(v -> showDepositDialog());
-        findViewById(R.id.btnSendFeedback).setOnClickListener(v -> showFeedbackDialog());
-        findViewById(R.id.btnSaveProfile).setOnClickListener(v -> saveProfile());
-        findViewById(R.id.btnLogout).setOnClickListener(v -> logoutRider());
+        btnDutyToggle.setOnClickListener(v -> toggleDuty());
+        btnBannerDeposit.setOnClickListener(v -> { switchTab(1); showDepositDialog(); });
+        btnWithdrawEarnings.setOnClickListener(v -> showWithdrawDialog());
+        btnDepositCod.setOnClickListener(v -> showDepositDialog());
+        btnSendFeedback.setOnClickListener(v -> showFeedbackDialog());
+        btnSaveProfile.setOnClickListener(v -> saveProfile());
+        btnLogout.setOnClickListener(v -> logoutRider());
 
         btnCallHub.setOnClickListener(v -> {
-            if (!supportPhone.isEmpty()) startActivity(new Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + supportPhone)));
+            if (!supportPhone.isEmpty()) onDialPhone(supportPhone);
         });
         btnWaHub.setOnClickListener(v -> {
             String digits = (supportWhatsapp.isEmpty() ? supportPhone : supportWhatsapp).replaceAll("\\D", "");
@@ -239,34 +278,21 @@ public class MainActivity extends AppCompatActivity {
 
     private void requestLocationPermissions() {
         List<String> list = new ArrayList<>();
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            list.add(Manifest.permission.ACCESS_FINE_LOCATION);
-        }
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            list.add(Manifest.permission.ACCESS_COARSE_LOCATION);
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) list.add(Manifest.permission.ACCESS_FINE_LOCATION);
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) list.add(Manifest.permission.ACCESS_COARSE_LOCATION);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             list.add(Manifest.permission.POST_NOTIFICATIONS);
         }
-        if (!list.isEmpty()) {
-            ActivityCompat.requestPermissions(this, list.toArray(new String[0]), REQ_PERMS);
-        } else {
-            promptBackgroundPermission();
-        }
+        if (!list.isEmpty()) ActivityCompat.requestPermissions(this, list.toArray(new String[0]), REQ_PERMS);
+        else promptBackgroundPermission();
     }
 
     private void promptBackgroundPermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
-                ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             new AlertDialog.Builder(this)
                     .setTitle("Background GPS Permission")
                     .setMessage("Screen off hone par bhi 5 second live location update ke liye Location permission ko 'Allow all the time' par set karein.")
-                    .setPositiveButton("Settings", (d, w) -> {
-                        Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                                Uri.fromParts("package", getPackageName(), null));
-                        startActivity(intent);
-                    })
+                    .setPositiveButton("Settings", (d, w) -> startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", getPackageName(), null))))
                     .setNegativeButton("Later", null)
                     .show();
         }
@@ -330,22 +356,18 @@ public class MainActivity extends AppCompatActivity {
                 tvSuspendedBanner.setVisibility(riderSuspended ? View.VISIBLE : View.GONE);
                 tvApprovalBanner.setVisibility(riderApproved ? View.GONE : View.VISIBLE);
                 if (!adminNote.isEmpty()) {
-                    tvPersonalNotice.setText("ADMIN MESSAGE: " + adminNote);
+                    tvPersonalNotice.setText("💬 MESSAGE FROM ADMIN: " + adminNote);
                     tvPersonalNotice.setVisibility(View.VISIBLE);
-                } else {
-                    tvPersonalNotice.setVisibility(View.GONE);
-                }
+                } else tvPersonalNotice.setVisibility(View.GONE);
 
                 if (riderOnline && !riderSuspended) {
-                    dotOnline.setBackgroundColor(Color.parseColor("#16A34A"));
+                    dotOnline.setBackground(RiderUiKit.makeOval("#16A34A"));
                     tvDutyLabel.setText("Online");
                     layoutGpsBar.setVisibility(View.VISIBLE);
-                    if (lastLoc > 0) {
-                        tvGpsSyncTime.setText("Synced " + new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date(lastLoc)));
-                    }
+                    if (lastLoc > 0) tvGpsSyncTime.setText("Synced " + new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date(lastLoc)));
                     startGpsService();
                 } else {
-                    dotOnline.setBackgroundColor(Color.parseColor("#EF4444"));
+                    dotOnline.setBackground(RiderUiKit.makeOval("#EF4444"));
                     tvDutyLabel.setText("Offline");
                     layoutGpsBar.setVisibility(View.GONE);
                     stopGpsService();
@@ -358,9 +380,7 @@ public class MainActivity extends AppCompatActivity {
                 setIfUnfocused(etProfUpi, riderUpi);
                 setIfUnfocused(etProfVehicle, riderVehicle);
             }
-
-            @Override
-            public void onCancelled(@NonNull DatabaseError error) {}
+            @Override public void onCancelled(@NonNull DatabaseError error) {}
         });
 
         db.child("restaurants").addValueEventListener(new ValueEventListener() {
@@ -379,9 +399,7 @@ public class MainActivity extends AppCompatActivity {
                 }
                 renderTripsUI();
             }
-
-            @Override
-            public void onCancelled(@NonNull DatabaseError error) {}
+            @Override public void onCancelled(@NonNull DatabaseError error) {}
         });
 
         db.child("admin/settings").addValueEventListener(new ValueEventListener() {
@@ -401,29 +419,26 @@ public class MainActivity extends AppCompatActivity {
 
                 String ann = TripHelper.getStr(s, "riderAnnouncement", "");
                 if (!ann.isEmpty()) {
-                    tvBroadcastBanner.setText("ADMIN NOTICE: " + ann);
+                    tvBroadcastBanner.setText("📢 ADMIN NOTICE: " + ann);
                     tvBroadcastBanner.setVisibility(View.VISIBLE);
-                } else {
-                    tvBroadcastBanner.setVisibility(View.GONE);
-                }
+                } else tvBroadcastBanner.setVisibility(View.GONE);
 
                 supportPhone = TripHelper.getStr(s, "supportPhone", "");
                 supportWhatsapp = TripHelper.getStr(s, "supportWhatsapp", "");
                 String hrs = TripHelper.getStr(s, "supportHours", "");
-                tvHelplineHours.setText(hrs.isEmpty() ? "Need hub assistance?" : "Hours: " + hrs);
+                tvHelplineHours.setText(hrs.isEmpty() ? "Need hub assistance or want to report an issue?" : "Helpline Hours: " + hrs);
                 btnCallHub.setVisibility(supportPhone.isEmpty() ? View.GONE : View.VISIBLE);
                 btnWaHub.setVisibility((supportWhatsapp.isEmpty() && supportPhone.isEmpty()) ? View.GONE : View.VISIBLE);
 
                 tvPayoutLimits.setText(String.format(Locale.US, "Limits: ₹%.0f - ₹%.0f", minRiderPayout, maxRiderPayout));
                 tvCodCashLabel.setText(String.format(Locale.US, "ADMIN COD CASH IN HAND (MAX ₹%.0f)", maxCashLimit));
                 tvCodDepositLimits.setText(String.format(Locale.US, "Deposit Limits: ₹%.0f - ₹%.0f", minRiderCodDeposit, maxRiderCodDeposit));
+                tvCashLimitText.setText(String.format(Locale.US, "🔒 CASH LIMIT EXCEEDED (₹%.0f+): Deposit COD cash to unlock pickups!", maxCashLimit));
 
                 recalculateFinancials();
                 renderTripsUI();
             }
-
-            @Override
-            public void onCancelled(@NonNull DatabaseError error) {}
+            @Override public void onCancelled(@NonNull DatabaseError error) {}
         });
 
         db.child("orders").addValueEventListener(new ValueEventListener() {
@@ -434,26 +449,19 @@ public class MainActivity extends AppCompatActivity {
                 for (DataSnapshot ds : snapshot.getChildren()) {
                     if (!uid.equals(TripHelper.getStr(ds, "deliveryUid", ""))) continue;
                     TripHelper.OrderData o = parseOrder(ds);
-                    if ("DELIVERED".equals(o.status) || "CANCELLED".equals(o.status)) {
-                        myCompletedOrders.add(o);
-                    } else {
-                        myActiveOrders.add(o);
-                    }
+                    if ("DELIVERED".equals(o.status) || "CANCELLED".equals(o.status)) myCompletedOrders.add(o);
+                    else myActiveOrders.add(o);
                 }
-
                 if (prevActiveCount != -1 && myActiveOrders.size() > prevActiveCount) {
                     playAlertChime();
                     toast("🔔 New grocery trip assigned!");
                 }
                 prevActiveCount = myActiveOrders.size();
-
                 recalculateFinancials();
                 renderTripsUI();
                 renderCompletedTripsUI();
             }
-
-            @Override
-            public void onCancelled(@NonNull DatabaseError error) {}
+            @Override public void onCancelled(@NonNull DatabaseError error) {}
         });
 
         db.child("settlements").addValueEventListener(new ValueEventListener() {
@@ -468,29 +476,23 @@ public class MainActivity extends AppCompatActivity {
                     if (!utr.isEmpty()) allExistingUtrs.add(utr);
                     if (uid.equals(TripHelper.getStr(ds, "riderUid", ""))) {
                         mine.add(ds);
-                        if ("APPROVED".equals(TripHelper.getStr(ds, "status", ""))) {
-                            approvedSettlementsTotal += TripHelper.getDouble(ds, "amount", 0);
-                        }
+                        if ("APPROVED".equals(TripHelper.getStr(ds, "status", ""))) approvedSettlementsTotal += TripHelper.getDouble(ds, "amount", 0);
                     }
                 }
                 Collections.reverse(mine);
-                if (mine.isEmpty()) {
-                    containerSettlementHistory.addView(makeEmptyText("No COD handover requests yet."));
-                } else {
+                if (mine.isEmpty()) containerSettlementHistory.addView(RiderUiKit.makeEmptyText(MainActivity.this, "No COD handover requests yet."));
+                else {
                     for (DataSnapshot ds : mine) {
                         String st = TripHelper.getStr(ds, "status", "PENDING");
-                        containerSettlementHistory.addView(makeLogRow(
+                        containerSettlementHistory.addView(RiderUiKit.makeLogRow(MainActivity.this,
                                 String.format(Locale.US, "₹%.2f", TripHelper.getDouble(ds, "amount", 0)),
                                 TripHelper.getStr(ds, "mode", "") + " • " + TripHelper.getStr(ds, "utr", ""),
-                                st, "APPROVED".equals(st) ? "#10B981" : "#F59E0B"
-                        ));
+                                st, "APPROVED".equals(st) ? "#34D399" : "#FBBF24"));
                     }
                 }
                 recalculateFinancials();
             }
-
-            @Override
-            public void onCancelled(@NonNull DatabaseError error) {}
+            @Override public void onCancelled(@NonNull DatabaseError error) {}
         });
 
         db.child("riderPayouts").addValueEventListener(new ValueEventListener() {
@@ -502,30 +504,24 @@ public class MainActivity extends AppCompatActivity {
                 for (DataSnapshot ds : snapshot.getChildren()) {
                     if (uid.equals(TripHelper.getStr(ds, "riderUid", ""))) {
                         mine.add(ds);
-                        if ("PAID".equals(TripHelper.getStr(ds, "status", ""))) {
-                            paidPayoutsTotal += TripHelper.getDouble(ds, "amount", 0);
-                        }
+                        if ("PAID".equals(TripHelper.getStr(ds, "status", ""))) paidPayoutsTotal += TripHelper.getDouble(ds, "amount", 0);
                     }
                 }
                 Collections.reverse(mine);
-                if (mine.isEmpty()) {
-                    containerPayoutHistory.addView(makeEmptyText("No payout requests yet."));
-                } else {
+                if (mine.isEmpty()) containerPayoutHistory.addView(RiderUiKit.makeEmptyText(MainActivity.this, "No payout requests yet."));
+                else {
                     for (DataSnapshot ds : mine) {
                         String st = TripHelper.getStr(ds, "status", "PENDING");
                         String ref = TripHelper.getStr(ds, "adminRef", "");
-                        containerPayoutHistory.addView(makeLogRow(
+                        containerPayoutHistory.addView(RiderUiKit.makeLogRow(MainActivity.this,
                                 String.format(Locale.US, "₹%.2f", TripHelper.getDouble(ds, "amount", 0)),
                                 "UPI: " + TripHelper.getStr(ds, "riderUpiId", "") + (ref.isEmpty() ? "" : " • Ref: " + ref),
-                                st, "PAID".equals(st) ? "#10B981" : "#F59E0B"
-                        ));
+                                st, "PAID".equals(st) ? "#34D399" : "#FBBF24"));
                     }
                 }
                 recalculateFinancials();
             }
-
-            @Override
-            public void onCancelled(@NonNull DatabaseError error) {}
+            @Override public void onCancelled(@NonNull DatabaseError error) {}
         });
 
         db.child("riderRatings").child(uid).addValueEventListener(new ValueEventListener() {
@@ -535,25 +531,16 @@ public class MainActivity extends AppCompatActivity {
                 List<DataSnapshot> list = new ArrayList<>();
                 for (DataSnapshot ds : snapshot.getChildren()) list.add(ds);
                 Collections.reverse(list);
-                if (list.isEmpty()) {
-                    containerRatings.addView(makeEmptyText("No customer ratings yet."));
-                    return;
-                }
-                int limit = Math.min(10, list.size());
-                for (int i = 0; i < limit; i++) {
+                if (list.isEmpty()) { containerRatings.addView(RiderUiKit.makeEmptyText(MainActivity.this, "No customer ratings yet.")); return; }
+                for (int i = 0; i < Math.min(10, list.size()); i++) {
                     DataSnapshot ds = list.get(i);
-                    long stars = TripHelper.getLong(ds, "rating", 5);
-                    String comment = TripHelper.getStr(ds, "comment", "");
-                    containerRatings.addView(makeLogRow(
+                    containerRatings.addView(RiderUiKit.makeLogRow(MainActivity.this,
                             TripHelper.getStr(ds, "customerName", "Customer"),
-                            comment.isEmpty() ? "Rated delivery" : comment,
-                            "⭐ " + stars, "#FBBF24"
-                    ));
+                            TripHelper.getStr(ds, "comment", "Rated delivery"),
+                            "⭐ " + TripHelper.getLong(ds, "rating", 5), "#FBBF24"));
                 }
             }
-
-            @Override
-            public void onCancelled(@NonNull DatabaseError error) {}
+            @Override public void onCancelled(@NonNull DatabaseError error) {}
         });
 
         db.child("feedbacks").addValueEventListener(new ValueEventListener() {
@@ -561,25 +548,19 @@ public class MainActivity extends AppCompatActivity {
             public void onDataChange(@NonNull DataSnapshot snapshot) {
                 containerMyFeedbacks.removeAllViews();
                 List<DataSnapshot> mine = new ArrayList<>();
-                for (DataSnapshot ds : snapshot.getChildren()) {
-                    if (uid.equals(TripHelper.getStr(ds, "uid", ""))) mine.add(ds);
-                }
+                for (DataSnapshot ds : snapshot.getChildren()) if (uid.equals(TripHelper.getStr(ds, "uid", ""))) mine.add(ds);
                 Collections.reverse(mine);
-                int limit = Math.min(3, mine.size());
-                for (int i = 0; i < limit; i++) {
+                for (int i = 0; i < Math.min(3, mine.size()); i++) {
                     DataSnapshot ds = mine.get(i);
                     String st = TripHelper.getStr(ds, "status", "OPEN");
                     String reply = TripHelper.getStr(ds, "adminReply", "");
-                    containerMyFeedbacks.addView(makeLogRow(
+                    containerMyFeedbacks.addView(RiderUiKit.makeLogRow(MainActivity.this,
                             TripHelper.getStr(ds, "subject", "Ticket"),
                             reply.isEmpty() ? TripHelper.getStr(ds, "message", "") : "Admin: " + reply,
-                            st, "RESOLVED".equals(st) ? "#10B981" : "#F59E0B"
-                    ));
+                            st, "RESOLVED".equals(st) ? "#34D399" : "#FBBF24"));
                 }
             }
-
-            @Override
-            public void onCancelled(@NonNull DatabaseError error) {}
+            @Override public void onCancelled(@NonNull DatabaseError error) {}
         });
     }
 
@@ -630,16 +611,9 @@ public class MainActivity extends AppCompatActivity {
             TripHelper.TripGroup g = map.get(key);
             if (g == null) {
                 g = new TripHelper.TripGroup();
-                g.tripId = key;
-                g.customerUid = o.customerUid;
-                g.phone = o.phone;
-                g.address = o.address;
-                g.customerLat = o.customerLat;
-                g.customerLng = o.customerLng;
-                g.locationLink = o.locationLink;
-                g.deliveryOtp = o.deliveryOtp;
-                g.paymentMode = o.paymentMode;
-                g.assignedAt = o.assignedAt;
+                g.tripId = key; g.customerUid = o.customerUid; g.phone = o.phone; g.address = o.address;
+                g.customerLat = o.customerLat; g.customerLng = o.customerLng; g.locationLink = o.locationLink;
+                g.deliveryOtp = o.deliveryOtp; g.paymentMode = o.paymentMode; g.assignedAt = o.assignedAt;
                 map.put(key, g);
             }
             g.orders.add(o);
@@ -650,294 +624,21 @@ public class MainActivity extends AppCompatActivity {
     private void renderTripsUI() {
         containerActiveTrips.removeAllViews();
         timerViews.clear();
+        timerBars.clear();
         List<TripHelper.TripGroup> trips = groupOrders(myActiveOrders);
         tvActiveCount.setText(trips.size() + " Active");
 
         if (trips.isEmpty()) {
-            containerActiveTrips.addView(makeEmptyText("No active trips in queue.\nTurn Online to receive nearest store dispatches!"));
+            containerActiveTrips.addView(RiderUiKit.makeEmptyText(this, "🛒 No active grocery trips.\nTurn Online to receive auto-dispatches!"));
             return;
         }
         for (TripHelper.TripGroup trip : trips) {
-            containerActiveTrips.addView(buildTripCard(trip));
+            containerActiveTrips.addView(RiderUiKit.buildTripCard(
+                    this, trip, baseRiderFee, riderLat, riderLng, acceptTimeoutSec,
+                    allowRiderPass, allowRiderSos, storesMap, timerViews, timerBars, this
+            ));
         }
-    }
-
-    private View buildTripCard(final TripHelper.TripGroup trip) {
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(16), dp(16), dp(16), dp(16));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-        lp.bottomMargin = dp(14);
-        card.setLayoutParams(lp);
-        card.setBackgroundColor(Color.parseColor("#0F172A"));
-
-        boolean isAccepted = true;
-        double totalBill = 0, totalFee = 0;
-        StringBuilder itemsSummary = new StringBuilder();
-        for (TripHelper.OrderData o : trip.orders) {
-            if (!Boolean.TRUE.equals(o.riderAccepted)) isAccepted = false;
-            totalBill += o.totalAmount;
-            totalFee += (o.deliveryCharge > 0 ? o.deliveryCharge : baseRiderFee);
-            for (TripHelper.OrderItem it : o.items) {
-                if (itemsSummary.length() > 0) itemsSummary.append(", ");
-                itemsSummary.append(it.qty).append("x ").append(it.name);
-            }
-        }
-        final boolean hasPickedUp = TripHelper.isTripPickedUp(trip);
-        final boolean isPrepaid = "WALLET".equals(trip.paymentMode) || ("UPI".equals(trip.paymentMode) && allUpiVerified(trip));
-
-        TextView title = new TextView(this);
-        title.setText((trip.orders.size() > 1 ? "🏪 " + trip.orders.size() + "-STORES COMBO" : "🛵 SINGLE STORE TRIP")
-                + "  •  #" + shortId(trip.tripId)
-                + (isAccepted ? "" : "  [ACCEPT REQUIRED]"));
-        title.setTextColor(Color.parseColor(isAccepted ? "#38BDF8" : "#FBBF24"));
-        title.setTextSize(15);
-        title.setTypeface(null, android.graphics.Typeface.BOLD);
-        card.addView(title);
-
-        TextView earn = new TextView(this);
-        earn.setText(String.format(Locale.US, "Earning: +₹%.0f  |  %s: ₹%.0f", totalFee,
-                isPrepaid ? trip.paymentMode + " Paid" : ("UPI".equals(trip.paymentMode) ? "UPI Unverified" : "COD"), totalBill));
-        earn.setTextColor(Color.parseColor("#10B981"));
-        earn.setTextSize(13);
-        earn.setTypeface(null, android.graphics.Typeface.BOLD);
-        earn.setPadding(0, dp(4), 0, dp(8));
-        card.addView(earn);
-
-        if (!isAccepted) {
-            TextView tvTimer = new TextView(this);
-            tvTimer.setTextColor(Color.parseColor("#F59E0B"));
-            tvTimer.setTextSize(12);
-            tvTimer.setTypeface(null, android.graphics.Typeface.BOLD);
-            card.addView(tvTimer);
-            timerViews.put(trip.tripId, tvTimer);
-
-            for (int i = 0; i < trip.orders.size(); i++) {
-                TripHelper.OrderData o = trip.orders.get(i);
-                TripHelper.StoreData st = storesMap.get(o.restaurantId);
-                String stName = st != null ? st.name : "Store";
-                double dist = st != null ? TripHelper.calculateDistanceKm(riderLat, riderLng, st.lat, st.lng) : -1;
-                TextView stTv = new TextView(this);
-                stTv.setText("• Store " + (i + 1) + ": " + stName + (dist >= 0 ? String.format(Locale.US, " (~%.1f km)", dist) : ""));
-                stTv.setTextColor(Color.parseColor("#CBD5E1"));
-                stTv.setTextSize(12);
-                card.addView(stTv);
-            }
-
-            TextView itTv = new TextView(this);
-            itTv.setText("Items: " + itemsSummary);
-            itTv.setTextColor(Color.parseColor("#94A3B8"));
-            itTv.setTextSize(12);
-            itTv.setPadding(0, dp(6), 0, dp(10));
-            card.addView(itTv);
-
-            LinearLayout row = new LinearLayout(this);
-            row.setOrientation(LinearLayout.HORIZONTAL);
-            if (allowRiderPass && !hasPickedUp) {
-                Button bPass = makeBtn("Pass", "#7F1D1D", "#FCA5A5");
-                bPass.setOnClickListener(v -> passTripToNextRider(trip, "Rider declined"));
-                row.addView(bPass, new LinearLayout.LayoutParams(0, dp(44), 1f));
-            }
-            Button bAccept = makeBtn(String.format(Locale.US, "Accept (+₹%.0f)", totalFee), "#16A34A", "#FFFFFF");
-            LinearLayout.LayoutParams ap = new LinearLayout.LayoutParams(0, dp(44), 1.5f);
-            ap.leftMargin = dp(8);
-            row.addView(bAccept, ap);
-            bAccept.setOnClickListener(v -> acceptTrip(trip));
-            card.addView(row);
-            return card;
-        }
-
-        List<TripHelper.OrderData> sortedStops = new ArrayList<>(trip.orders);
-        Collections.sort(sortedStops, (a, b) -> {
-            boolean pa = "PICKED_UP".equals(a.status) || "OUT_FOR_DELIVERY".equals(a.status);
-            boolean pb = "PICKED_UP".equals(b.status) || "OUT_FOR_DELIVERY".equals(b.status);
-            if (pa != pb) return pa ? 1 : -1;
-            TripHelper.StoreData sa = storesMap.get(a.restaurantId);
-            TripHelper.StoreData sb = storesMap.get(b.restaurantId);
-            double da = sa != null ? TripHelper.calculateDistanceKm(riderLat, riderLng, sa.lat, sa.lng) : 999;
-            double dbDist = sb != null ? TripHelper.calculateDistanceKm(riderLat, riderLng, sb.lat, sb.lng) : 999;
-            return Double.compare(da, dbDist);
-        });
-
-        boolean allPickedUp = true;
-        boolean shownActiveStore = false;
-        for (int i = 0; i < sortedStops.size(); i++) {
-            final TripHelper.OrderData o = sortedStops.get(i);
-            boolean isPicked = "PICKED_UP".equals(o.status) || "OUT_FOR_DELIVERY".equals(o.status);
-            TripHelper.StoreData st = storesMap.get(o.restaurantId);
-            String stName = st != null ? st.name : "Store";
-            String stAddr = st != null ? st.address : "Gossaigaon Bazar";
-            String stPhone = st != null ? st.phone : "";
-
-            LinearLayout stopBox = new LinearLayout(this);
-            stopBox.setOrientation(LinearLayout.VERTICAL);
-            stopBox.setPadding(dp(10), dp(10), dp(10), dp(10));
-            LinearLayout.LayoutParams sbp = new LinearLayout.LayoutParams(-1, -2);
-            sbp.bottomMargin = dp(8);
-            stopBox.setLayoutParams(sbp);
-
-            if (isPicked) {
-                stopBox.setBackgroundColor(Color.parseColor("#064E3B"));
-                TextView t = new TextView(this);
-                t.setText("✅ STOP " + (i + 1) + ": PICKED UP - " + stName);
-                t.setTextColor(Color.parseColor("#34D399"));
-                t.setTextSize(12);
-                t.setTypeface(null, android.graphics.Typeface.BOLD);
-                stopBox.addView(t);
-            } else {
-                allPickedUp = false;
-                if (!shownActiveStore) {
-                    shownActiveStore = true;
-                    stopBox.setBackgroundColor(Color.parseColor("#172238"));
-                    double d = st != null ? TripHelper.calculateDistanceKm(riderLat, riderLng, st.lat, st.lng) : -1;
-                    TextView t = new TextView(this);
-                    t.setText("📍 STOP " + (i + 1) + " PICKUP: " + stName + (d >= 0 ? String.format(Locale.US, " (~%.1f km)", d) : ""));
-                    t.setTextColor(Color.parseColor("#60A5FA"));
-                    t.setTextSize(13);
-                    t.setTypeface(null, android.graphics.Typeface.BOLD);
-                    stopBox.addView(t);
-
-                    TextView addrTv = new TextView(this);
-                    addrTv.setText(stAddr + "\n📦 Store Pickup Code: [ " + TripHelper.getStorePickupCode(o) + " ]");
-                    addrTv.setTextColor(Color.parseColor("#E2E8F0"));
-                    addrTv.setTextSize(12);
-                    addrTv.setPadding(0, dp(4), 0, dp(6));
-                    stopBox.addView(addrTv);
-
-                    LinearLayout linkRow = new LinearLayout(this);
-                    linkRow.setOrientation(LinearLayout.HORIZONTAL);
-                    Button bMap = makeBtn("Store Maps", "#1D4ED8", "#FFFFFF");
-                    bMap.setOnClickListener(v -> openGoogleMaps(st != null ? st.lat : 26.4524, st != null ? st.lng : 89.9723, stName));
-                    linkRow.addView(bMap, new LinearLayout.LayoutParams(0, dp(38), 1f));
-                    if (!stPhone.isEmpty()) {
-                        Button bCall = makeBtn("Call Store", "#202D45", "#FFFFFF");
-                        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(0, dp(38), 1f);
-                        cp.leftMargin = dp(6);
-                        bCall.setOnClickListener(v -> startActivity(new Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + stPhone))));
-                        linkRow.addView(bCall, cp);
-                    }
-                    stopBox.addView(linkRow);
-
-                    if ("READY_FOR_PICKUP".equals(o.status)) {
-                        Button bPick = makeBtn("Confirm Picked Up", "#16A34A", "#FFFFFF");
-                        LinearLayout.LayoutParams pp = new LinearLayout.LayoutParams(-1, dp(44));
-                        pp.topMargin = dp(8);
-                        bPick.setOnClickListener(v -> confirmStorePickup(o.orderId));
-                        stopBox.addView(bPick, pp);
-                    } else {
-                        TextView waitTv = new TextView(this);
-                        waitTv.setText("⏳ Waiting for Store Ready (" + o.status + ")");
-                        waitTv.setTextColor(Color.parseColor("#F59E0B"));
-                        waitTv.setTextSize(12);
-                        waitTv.setPadding(0, dp(6), 0, 0);
-                        stopBox.addView(waitTv);
-                    }
-                } else {
-                    stopBox.setBackgroundColor(Color.parseColor("#090E1A"));
-                    TextView t = new TextView(this);
-                    t.setText("🔒 STOP " + (i + 1) + ": NEXT STORE - " + stName);
-                    t.setTextColor(Color.parseColor("#64748B"));
-                    t.setTextSize(12);
-                    stopBox.addView(t);
-                }
-            }
-            card.addView(stopBox);
-        }
-
-        if (allPickedUp) {
-            LinearLayout custBox = new LinearLayout(this);
-            custBox.setOrientation(LinearLayout.VERTICAL);
-            custBox.setBackgroundColor(Color.parseColor("#064E3B"));
-            custBox.setPadding(dp(10), dp(10), dp(10), dp(10));
-
-            double cDist = TripHelper.calculateDistanceKm(riderLat, riderLng, trip.customerLat, trip.customerLng);
-            TextView ct = new TextView(this);
-            ct.setText("🏠 DELIVER TO CUSTOMER" + (cDist >= 0 ? String.format(Locale.US, " (~%.1f km)", cDist) : ""));
-            ct.setTextColor(Color.parseColor("#34D399"));
-            ct.setTextSize(13);
-            ct.setTypeface(null, android.graphics.Typeface.BOLD);
-            custBox.addView(ct);
-
-            TextView ca = new TextView(this);
-            ca.setText(trip.address + (trip.phone.isEmpty() ? "" : "\n📱 " + trip.phone));
-            ca.setTextColor(Color.WHITE);
-            ca.setTextSize(12);
-            ca.setPadding(0, dp(4), 0, dp(8));
-            custBox.addView(ca);
-
-            LinearLayout cRow = new LinearLayout(this);
-            cRow.setOrientation(LinearLayout.HORIZONTAL);
-            Button bCMap = makeBtn("Maps Nav", "#16A34A", "#FFFFFF");
-            bCMap.setOnClickListener(v -> openGoogleMaps(trip.customerLat, trip.customerLng, trip.address));
-            cRow.addView(bCMap, new LinearLayout.LayoutParams(0, dp(38), 1f));
-            if (!trip.phone.isEmpty()) {
-                Button bCCall = makeBtn("Call", "#172238", "#FFFFFF");
-                LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(0, dp(38), 0.7f);
-                cp.leftMargin = dp(6);
-                bCCall.setOnClickListener(v -> startActivity(new Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + trip.phone))));
-                cRow.addView(bCCall, cp);
-            }
-            custBox.addView(cRow);
-
-            boolean isOut = false;
-            for (TripHelper.OrderData o : trip.orders) if ("OUT_FOR_DELIVERY".equals(o.status)) isOut = true;
-
-            final double finalBill = totalBill;
-            if (!isOut) {
-                Button bStart = makeBtn("Start Doorstep Route", "#38BDF8", "#000000");
-                LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-1, dp(46));
-                sp.topMargin = dp(8);
-                bStart.setOnClickListener(v -> startDoorstepRoute(trip));
-                custBox.addView(bStart, sp);
-            } else {
-                Button bPin = makeBtn("Enter Customer PIN & Complete", "#10B981", "#FFFFFF");
-                LinearLayout.LayoutParams pp = new LinearLayout.LayoutParams(-1, dp(46));
-                pp.topMargin = dp(8);
-                bPin.setOnClickListener(v -> showPinVerifyDialog(trip, finalBill, isPrepaid));
-                custBox.addView(bPin, pp);
-            }
-            card.addView(custBox);
-        }
-
-        LinearLayout bottomRow = new LinearLayout(this);
-        bottomRow.setOrientation(LinearLayout.HORIZONTAL);
-        LinearLayout.LayoutParams brp = new LinearLayout.LayoutParams(-1, -2);
-        brp.topMargin = dp(10);
-        bottomRow.setLayoutParams(brp);
-
-        if (allowRiderSos) {
-            Button bSos = makeBtn("⚠️ Road Issue", "#451A03", "#FBBF24");
-            bSos.setOnClickListener(v -> showSosDialog(trip));
-            bottomRow.addView(bSos, new LinearLayout.LayoutParams(0, dp(38), 1f));
-        }
-
-        if (hasPickedUp) {
-            TextView lockTv = new TextView(this);
-            lockTv.setText("🔒 Picked Up (Cancel Locked)");
-            lockTv.setTextColor(Color.parseColor("#94A3B8"));
-            lockTv.setTextSize(11);
-            lockTv.setTypeface(null, android.graphics.Typeface.BOLD);
-            lockTv.setGravity(android.view.Gravity.CENTER);
-            LinearLayout.LayoutParams lpLock = new LinearLayout.LayoutParams(0, dp(38), 1.2f);
-            lpLock.leftMargin = dp(8);
-            bottomRow.addView(lockTv, lpLock);
-        } else if (allowRiderPass) {
-            Button bPassTrip = makeBtn("Pass Trip", "#7F1D1D", "#FCA5A5");
-            LinearLayout.LayoutParams ptp = new LinearLayout.LayoutParams(0, dp(38), 1f);
-            ptp.leftMargin = dp(8);
-            bPassTrip.setOnClickListener(v -> showPassTripDialog(trip));
-            bottomRow.addView(bPassTrip, ptp);
-        }
-
-        card.addView(bottomRow);
-        return card;
-    }
-
-    private boolean allUpiVerified(TripHelper.TripGroup trip) {
-        for (TripHelper.OrderData o : trip.orders) {
-            if (!"VERIFIED".equals(o.paymentStatus)) return false;
-        }
-        return true;
+        updateAcceptTimers();
     }
 
     private void updateAcceptTimers() {
@@ -947,61 +648,58 @@ public class MainActivity extends AppCompatActivity {
             for (TripHelper.OrderData o : trip.orders) if (!Boolean.TRUE.equals(o.riderAccepted)) accepted = false;
             if (accepted || TripHelper.isTripPickedUp(trip)) continue;
 
-            long elapsed = (now - trip.assignedAt) / 1000L;
-            long rem = Math.max(0, acceptTimeoutSec - elapsed);
+            long rem = Math.max(0, acceptTimeoutSec - ((now - trip.assignedAt) / 1000L));
             TextView tv = timerViews.get(trip.tripId);
             if (tv != null) tv.setText("⏳ Auto-Pass in: " + rem + "s");
+            ProgressBar pb = timerBars.get(trip.tripId);
+            if (pb != null) { pb.setMax((int) acceptTimeoutSec); pb.setProgress((int) rem); }
             if (rem <= 0 && !timedOutTrips.contains(trip.tripId)) {
                 timedOutTrips.add(trip.tripId);
-                passTripToNextRider(trip, "Auto-Timeout (" + acceptTimeoutSec + "s)");
+                onPassTrip(trip, "Auto-Timeout (" + acceptTimeoutSec + "s)");
             }
         }
     }
 
-    private void acceptTrip(TripHelper.TripGroup trip) {
+    @Override
+    public void onAcceptTrip(TripHelper.TripGroup trip) {
         if (riderSuspended) { toast("Account suspended!"); return; }
         long now = System.currentTimeMillis();
         for (TripHelper.OrderData o : trip.orders) {
             Map<String, Object> up = new HashMap<>();
-            up.put("riderAccepted", true);
-            up.put("riderAcceptedAt", now);
-            up.put("riderLat", riderLat);
-            up.put("riderLng", riderLng);
-            up.put("lastLocationUpdate", now);
-            up.put("updatedAt", now);
+            up.put("riderAccepted", true); up.put("riderAcceptedAt", now);
+            up.put("riderLat", riderLat); up.put("riderLng", riderLng);
+            up.put("lastLocationUpdate", now); up.put("updatedAt", now);
             db.child("orders").child(o.orderId).updateChildren(up);
         }
         toast("🎉 Trip Accepted!");
     }
 
-    private void confirmStorePickup(String orderId) {
+    @Override
+    public void onConfirmStorePickup(String orderId) {
         long now = System.currentTimeMillis();
         Map<String, Object> up = new HashMap<>();
-        up.put("status", "PICKED_UP");
-        up.put("storePickupVerifiedAt", now);
-        up.put("riderLat", riderLat);
-        up.put("riderLng", riderLng);
-        up.put("lastLocationUpdate", now);
-        up.put("updatedAt", now);
+        up.put("status", "PICKED_UP"); up.put("storePickupVerifiedAt", now);
+        up.put("riderLat", riderLat); up.put("riderLng", riderLng);
+        up.put("lastLocationUpdate", now); up.put("updatedAt", now);
         db.child("orders").child(orderId).updateChildren(up);
         toast("✅ Order Picked Up! Cancel/Pass ab lock ho gaya hai.");
     }
 
-    private void startDoorstepRoute(TripHelper.TripGroup trip) {
+    @Override
+    public void onStartDoorstepRoute(TripHelper.TripGroup trip) {
         long now = System.currentTimeMillis();
         for (TripHelper.OrderData o : trip.orders) {
             Map<String, Object> up = new HashMap<>();
             up.put("status", "OUT_FOR_DELIVERY");
-            up.put("riderLat", riderLat);
-            up.put("riderLng", riderLng);
-            up.put("lastLocationUpdate", now);
-            up.put("updatedAt", now);
+            up.put("riderLat", riderLat); up.put("riderLng", riderLng);
+            up.put("lastLocationUpdate", now); up.put("updatedAt", now);
             db.child("orders").child(o.orderId).updateChildren(up);
         }
         toast("🛵 Doorstep route started!");
     }
 
-    private void passTripToNextRider(final TripHelper.TripGroup trip, final String reason) {
+    @Override
+    public void onPassTrip(final TripHelper.TripGroup trip, final String reason) {
         if (TripHelper.isTripPickedUp(trip)) {
             toast("🔒 Store se pickup ke baad order cancel/pass nahi ho sakta!");
             return;
@@ -1011,129 +709,114 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onDataChange(@NonNull DataSnapshot snapshot) {
                 TripHelper.StoreData st = storesMap.get(trip.orders.get(0).restaurantId);
-                double sLat = st != null ? st.lat : riderLat;
-                double sLng = st != null ? st.lng : riderLng;
-
-                String nextUid = null, fallbackUid = null;
+                double sLat = st != null ? st.lat : riderLat, sLng = st != null ? st.lng : riderLng;
+                String nextUid = null, fallbackUid = null, myUid = currentUser.getUid();
                 double minDist = Double.MAX_VALUE;
-                String myUid = currentUser.getUid();
 
                 for (DataSnapshot ds : snapshot.getChildren()) {
                     String uid = ds.getKey();
                     if (uid == null || uid.equals(myUid)) continue;
-                    boolean app = TripHelper.getBool(ds, "approved", false);
-                    boolean on = TripHelper.getBool(ds, "online", false);
-                    boolean susp = TripHelper.getBool(ds, "suspended", false);
-                    if (!app || !on || susp) continue;
+                    if (!TripHelper.getBool(ds, "approved", false) || !TripHelper.getBool(ds, "online", false) || TripHelper.getBool(ds, "suspended", false)) continue;
 
-                    boolean alreadyRejected = false;
-                    for (TripHelper.OrderData o : trip.orders) {
-                        if (o.rejectedRiderUids.contains(uid)) { alreadyRejected = true; break; }
-                    }
-                    if (alreadyRejected) continue;
+                    boolean rejected = false;
+                    for (TripHelper.OrderData o : trip.orders) if (o.rejectedRiderUids.contains(uid)) { rejected = true; break; }
+                    if (rejected) continue;
 
-                    double rLat = TripHelper.getDouble(ds, "lat", 0);
-                    double rLng = TripHelper.getDouble(ds, "lng", 0);
+                    double rLat = TripHelper.getDouble(ds, "lat", 0), rLng = TripHelper.getDouble(ds, "lng", 0);
                     if (rLat != 0 && rLng != 0) {
                         double d = TripHelper.calculateDistanceKm(sLat, sLng, rLat, rLng);
-                        if (d >= 0 && d < minDist) {
-                            minDist = d;
-                            nextUid = uid;
-                        }
-                    } else if (fallbackUid == null) {
-                        fallbackUid = uid;
-                    }
+                        if (d >= 0 && d < minDist) { minDist = d; nextUid = uid; }
+                    } else if (fallbackUid == null) fallbackUid = uid;
                 }
                 if (nextUid == null) nextUid = fallbackUid;
 
                 long now = System.currentTimeMillis();
                 for (TripHelper.OrderData o : trip.orders) {
                     Map<String, Object> up = new HashMap<>();
-                    up.put("deliveryUid", nextUid);
-                    up.put("riderAccepted", null);
-                    up.put("riderAcceptedAt", null);
-                    up.put("assignedAt", nextUid != null ? now : null);
-                    up.put("updatedAt", now);
-
+                    up.put("deliveryUid", nextUid); up.put("riderAccepted", null); up.put("riderAcceptedAt", null);
+                    up.put("assignedAt", nextUid != null ? now : null); up.put("updatedAt", now);
                     Map<String, Object> rej = new HashMap<>();
-                    rej.put("riderName", riderName);
-                    rej.put("riderPhone", riderPhone);
-                    rej.put("reason", reason);
-                    rej.put("timestamp", now);
+                    rej.put("riderName", riderName); rej.put("riderPhone", riderPhone);
+                    rej.put("reason", reason); rej.put("timestamp", now);
                     up.put("rejectedByRiders/" + myUid, rej);
-
                     db.child("orders").child(o.orderId).updateChildren(up);
                 }
                 toast(nextUid != null ? "⚡ Trip nearest rider ko pass ho gaya!" : "Admin queue me bhej diya gaya.");
             }
-
-            @Override
-            public void onCancelled(@NonNull DatabaseError error) {}
+            @Override public void onCancelled(@NonNull DatabaseError error) {}
         });
     }
 
-    private void showPassTripDialog(final TripHelper.TripGroup trip) {
+    @Override
+    public void onShowPassDialog(final TripHelper.TripGroup trip) {
         if (!allowRiderPass) { toast("Passing trips disabled by Admin."); return; }
-        if (TripHelper.isTripPickedUp(trip)) {
-            toast("🔒 Store se pickup ke baad order cancel/pass nahi ho sakta!");
-            return;
-        }
+        if (TripHelper.isTripPickedUp(trip)) { toast("🔒 Pickup ke baad cancel/pass nahi ho sakta!"); return; }
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(RiderUiKit.dp(this, 20), RiderUiKit.dp(this, 10), RiderUiKit.dp(this, 20), RiderUiKit.dp(this, 8));
+
         String[] reasons = {"Vehicle breakdown / Tyre puncture", "Heavy rainfall / Waterlogging", "Personal emergency / Ending shift", "Customer unreachable"};
         Spinner sp = new Spinner(this);
         sp.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, reasons));
+        box.addView(sp);
+
+        final EditText etNote = new EditText(this);
+        etNote.setHint("Extra Note (Optional)");
+        box.addView(etNote);
+
         new AlertDialog.Builder(this)
-                .setTitle("Pass Trip #" + shortId(trip.tripId))
-                .setView(sp)
-                .setPositiveButton("Confirm Pass", (d, w) -> passTripToNextRider(trip, sp.getSelectedItem().toString()))
-                .setNegativeButton("Back", null)
-                .show();
+                .setTitle("Pass / Reject Trip #" + RiderUiKit.shortId(trip.tripId))
+                .setView(box)
+                .setPositiveButton("Confirm Pass", (d, w) -> {
+                    String r = sp.getSelectedItem().toString(), n = etNote.getText().toString().trim();
+                    onPassTrip(trip, n.isEmpty() ? r : r + " (" + n + ")");
+                })
+                .setNegativeButton("Go Back", null).show();
     }
 
-    private void showSosDialog(final TripHelper.TripGroup trip) {
+    @Override
+    public void onShowSosDialog(final TripHelper.TripGroup trip) {
         String[] reasons = {"🌧️ Heavy rainfall / waterlogging", "🛵 Tyre puncture / breakdown", "🚦 Traffic jam", "📞 Customer gate locked"};
         Spinner sp = new Spinner(this);
         sp.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, reasons));
         new AlertDialog.Builder(this)
-                .setTitle("Road Delay / SOS Alert")
-                .setView(sp)
+                .setTitle("⚠️ Road Delay / SOS Alert").setView(sp)
                 .setPositiveButton("Broadcast Alert", (d, w) -> {
                     long now = System.currentTimeMillis();
                     String msg = "Rider update: " + sp.getSelectedItem().toString();
                     for (TripHelper.OrderData o : trip.orders) {
                         Map<String, Object> up = new HashMap<>();
-                        up.put("emergencyAlert", true);
-                        up.put("emergencyDetails", msg);
-                        up.put("updatedAt", now);
+                        up.put("emergencyAlert", true); up.put("emergencyDetails", msg); up.put("updatedAt", now);
                         db.child("orders").child(o.orderId).updateChildren(up);
                     }
-                    toast("⚠️ Delay alert bhej diya gaya!");
+                    toast("⚠️ Delay alert sent!");
                 })
-                .setNegativeButton("Cancel", null)
-                .show();
+                .setNegativeButton("Cancel", null).show();
     }
 
-    private void showPinVerifyDialog(final TripHelper.TripGroup trip, final double totalBill, final boolean isPrepaid) {
+    @Override
+    public void onShowPinDialog(final TripHelper.TripGroup trip, final double totalBill, final boolean isPrepaid) {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(20), dp(12), dp(20), dp(8));
+        box.setPadding(RiderUiKit.dp(this, 20), RiderUiKit.dp(this, 12), RiderUiKit.dp(this, 20), RiderUiKit.dp(this, 8));
 
         final EditText etPin = new EditText(this);
-        etPin.setHint("4-Digit Customer PIN");
+        etPin.setHint("---- (4-Digit Customer PIN)");
         etPin.setInputType(InputType.TYPE_CLASS_NUMBER);
-        etPin.setTextSize(18);
+        etPin.setTextSize(20);
+        etPin.setGravity(Gravity.CENTER);
         box.addView(etPin);
 
         final TextView tvChange = new TextView(this);
         if (!isPrepaid) {
             TextView tvCod = new TextView(this);
-            tvCod.setText(String.format(Locale.US, "COD Cash to Collect: ₹%.2f", totalBill));
-            tvCod.setTextSize(15);
-            tvCod.setTypeface(null, android.graphics.Typeface.BOLD);
-            tvCod.setPadding(0, dp(10), 0, dp(4));
+            tvCod.setText(String.format(Locale.US, "Total COD Cash to Collect: ₹%.2f", totalBill));
+            tvCod.setTextColor(Color.parseColor("#16A34A"));
+            tvCod.setTypeface(null, Typeface.BOLD);
             box.addView(tvCod);
 
             final EditText etCash = new EditText(this);
-            etCash.setHint("Cash Given by Customer (Optional)");
+            etCash.setHint("Cash Tendered (e.g. 500)");
             etCash.setInputType(InputType.TYPE_CLASS_NUMBER);
             box.addView(etCash);
             box.addView(tvChange);
@@ -1142,9 +825,9 @@ public class MainActivity extends AppCompatActivity {
                 @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
                 @Override public void onTextChanged(CharSequence s, int a, int b, int c) {
                     try {
-                        double given = Double.parseDouble(s.toString());
-                        double ch = given - totalBill;
-                        tvChange.setText(ch >= 0 ? String.format(Locale.US, "Return Change: ₹%.2f", ch) : String.format(Locale.US, "Need ₹%.2f more", Math.abs(ch)));
+                        double ch = Double.parseDouble(s.toString()) - totalBill;
+                        tvChange.setText(ch >= 0 ? String.format(Locale.US, "Change to Return: ₹%.2f", ch) : String.format(Locale.US, "Need ₹%.2f more", Math.abs(ch)));
+                        tvChange.setTextColor(Color.parseColor(ch >= 0 ? "#16A34A" : "#EF4444"));
                     } catch (Exception e) { tvChange.setText(""); }
                 }
                 @Override public void afterTextChanged(Editable s) {}
@@ -1152,38 +835,26 @@ public class MainActivity extends AppCompatActivity {
         }
 
         new AlertDialog.Builder(this)
-                .setTitle("Verify PIN & Complete Trip")
-                .setView(box)
+                .setTitle("🔐 Verify PIN & Complete Trip").setView(box)
                 .setPositiveButton("Verify & Complete", (d, w) -> {
                     long lockUntil = pinLockUntil.containsKey(trip.tripId) ? pinLockUntil.get(trip.tripId) : 0L;
-                    if (System.currentTimeMillis() < lockUntil) {
-                        toast("🔒 Locked! Thodi der baad try karein.");
-                        return;
-                    }
+                    if (System.currentTimeMillis() < lockUntil) { toast("🔒 Locked! Wait 60s."); return; }
                     String entered = etPin.getText().toString().trim();
                     if (!trip.deliveryOtp.isEmpty() && !entered.equals(trip.deliveryOtp)) {
                         int fails = (pinFailCounts.containsKey(trip.tripId) ? pinFailCounts.get(trip.tripId) : 0) + 1;
-                        if (fails >= 3) {
-                            pinLockUntil.put(trip.tripId, System.currentTimeMillis() + 60000L);
-                            pinFailCounts.put(trip.tripId, 0);
-                            toast("🚨 3 galat attempts! 60s ke liye lock.");
-                        } else {
-                            pinFailCounts.put(trip.tripId, fails);
-                            toast("❌ Galat PIN! (" + (3 - fails) + " attempts left)");
-                        }
+                        if (fails >= 3) { pinLockUntil.put(trip.tripId, System.currentTimeMillis() + 60000L); pinFailCounts.put(trip.tripId, 0); toast("🚨 3 Wrong Attempts! Locked 60s."); }
+                        else { pinFailCounts.put(trip.tripId, fails); toast("❌ Wrong PIN! (" + (3 - fails) + " left)"); }
                         return;
                     }
                     long now = System.currentTimeMillis();
                     for (TripHelper.OrderData o : trip.orders) {
                         Map<String, Object> up = new HashMap<>();
-                        up.put("status", "DELIVERED");
-                        up.put("updatedAt", now);
+                        up.put("status", "DELIVERED"); up.put("updatedAt", now);
                         db.child("orders").child(o.orderId).updateChildren(up);
                     }
                     toast("🎉 PIN Verified! Trip Completed!");
                 })
-                .setNegativeButton("Cancel", null)
-                .show();
+                .setNegativeButton("Cancel", null).show();
     }
 
     private void recalculateFinancials() {
@@ -1191,216 +862,178 @@ public class MainActivity extends AppCompatActivity {
         for (TripHelper.OrderData o : myCompletedOrders) {
             if ("DELIVERED".equals(o.status)) {
                 totalEarned += (o.deliveryCharge > 0 ? o.deliveryCharge : baseRiderFee);
-                if (!"UPI".equals(o.paymentMode) && !"WALLET".equals(o.paymentMode)) {
-                    codCollected += o.totalAmount;
-                }
+                if (!"UPI".equals(o.paymentMode) && !"WALLET".equals(o.paymentMode)) codCollected += o.totalAmount;
             }
         }
         netCashInHand = Math.max(0, codCollected - approvedSettlementsTotal);
         availablePayoutBalance = Math.max(0, totalEarned - paidPayoutsTotal);
 
         tvAvailableEarnings.setText(String.format(Locale.US, "₹%.2f", availablePayoutBalance));
-        tvTotalCommission.setText(String.format(Locale.US, "Total Earned: ₹%.2f", totalEarned));
-        tvPaidByAdmin.setText(String.format(Locale.US, "Paid: ₹%.2f", paidPayoutsTotal));
+        tvTotalCommission.setText(String.format(Locale.US, "Total Commission: ₹%.2f", totalEarned));
+        tvPaidByAdmin.setText(String.format(Locale.US, "Paid by Admin: ₹%.2f", paidPayoutsTotal));
         tvCodCashInHand.setText(String.format(Locale.US, "₹%.2f", netCashInHand));
-        tvTotalCodCollected.setText(String.format(Locale.US, "Collected: ₹%.2f", codCollected));
+        tvTotalCodCollected.setText(String.format(Locale.US, "Total COD: ₹%.2f", codCollected));
         tvSettledToAdmin.setText(String.format(Locale.US, "Settled: ₹%.2f", approvedSettlementsTotal));
-        tvCashLimitBanner.setVisibility(netCashInHand >= maxCashLimit ? View.VISIBLE : View.GONE);
+        layoutCashLimitBanner.setVisibility(netCashInHand >= maxCashLimit ? View.VISIBLE : View.GONE);
     }
 
     private void renderCompletedTripsUI() {
         containerCompletedTrips.removeAllViews();
         List<TripHelper.TripGroup> done = groupOrders(myCompletedOrders);
-        if (done.isEmpty()) {
-            containerCompletedTrips.addView(makeEmptyText("No completed trips yet."));
-            return;
-        }
+        if (done.isEmpty()) { containerCompletedTrips.addView(RiderUiKit.makeEmptyText(this, "No past completed trips yet.")); return; }
         Collections.reverse(done);
         for (TripHelper.TripGroup t : done) {
             double fee = 0;
             for (TripHelper.OrderData o : t.orders) fee += (o.deliveryCharge > 0 ? o.deliveryCharge : baseRiderFee);
-            containerCompletedTrips.addView(makeLogRow("#" + shortId(t.tripId), t.address, String.format(Locale.US, "+₹%.0f", fee), "#10B981"));
+            containerCompletedTrips.addView(RiderUiKit.makeLogRow(this, "#" + RiderUiKit.shortId(t.tripId) + " • Completed", t.address, String.format(Locale.US, "+₹%.0f EARNED", fee), "#34D399"));
         }
     }
 
     private void showWithdrawDialog() {
-        if (availablePayoutBalance < minRiderPayout) {
-            toast(String.format(Locale.US, "Minimum ₹%.0f balance chahiye!", minRiderPayout));
-            return;
-        }
+        if (availablePayoutBalance < minRiderPayout) { toast(String.format(Locale.US, "Minimum ₹%.0f balance required!", minRiderPayout)); return; }
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(20), dp(12), dp(20), dp(8));
+        box.setPadding(RiderUiKit.dp(this, 20), RiderUiKit.dp(this, 12), RiderUiKit.dp(this, 20), RiderUiKit.dp(this, 8));
+
+        TextView balTv = new TextView(this);
+        balTv.setText(String.format(Locale.US, "Available Payout: ₹%.2f\nLimits: ₹%.0f - ₹%.0f", availablePayoutBalance, minRiderPayout, maxRiderPayout));
+        balTv.setTextColor(Color.parseColor("#0284C7")); balTv.setTypeface(null, Typeface.BOLD);
+        box.addView(balTv);
 
         final EditText etAmt = new EditText(this);
         etAmt.setInputType(InputType.TYPE_CLASS_NUMBER);
         etAmt.setText(String.valueOf((int) Math.min(Math.floor(availablePayoutBalance), maxRiderPayout)));
-        etAmt.setHint("Withdraw Amount (₹)");
         box.addView(etAmt);
 
         final EditText etUpi = new EditText(this);
-        etUpi.setText(riderUpi);
-        etUpi.setHint("Your Receiving UPI ID");
+        etUpi.setText(riderUpi); etUpi.setHint("Verify Your Receiving UPI ID");
         box.addView(etUpi);
 
         new AlertDialog.Builder(this)
-                .setTitle("Withdraw Earnings")
-                .setView(box)
+                .setTitle("Withdraw Earnings to UPI").setView(box)
                 .setPositiveButton("Send Request", (d, w) -> {
-                    double amt;
-                    try { amt = Double.parseDouble(etAmt.getText().toString().trim()); } catch (Exception e) { amt = 0; }
+                    double amt; try { amt = Double.parseDouble(etAmt.getText().toString().trim()); } catch (Exception e) { amt = 0; }
                     String upi = etUpi.getText().toString().trim();
-                    if (amt < minRiderPayout || amt > maxRiderPayout) {
-                        toast(String.format(Locale.US, "Limit: ₹%.0f - ₹%.0f", minRiderPayout, maxRiderPayout));
-                        return;
+                    if (amt < minRiderPayout || amt > maxRiderPayout || amt > availablePayoutBalance || !TripHelper.isValidUpiId(upi)) {
+                        toast("Invalid amount or UPI ID!"); return;
                     }
-                    if (amt > availablePayoutBalance) { toast("Insufficient balance!"); return; }
-                    if (!TripHelper.isValidUpiId(upi)) { toast("Valid UPI ID enter karein!"); return; }
-
                     Map<String, Object> req = new HashMap<>();
-                    req.put("riderUid", currentUser.getUid());
-                    req.put("riderName", riderName);
-                    req.put("riderPhone", riderPhone);
-                    req.put("riderUpiId", upi);
-                    req.put("amount", amt);
-                    req.put("status", "PENDING");
-                    req.put("createdAt", System.currentTimeMillis());
+                    req.put("riderUid", currentUser.getUid()); req.put("riderName", riderName); req.put("riderPhone", riderPhone);
+                    req.put("riderUpiId", upi); req.put("amount", amt); req.put("status", "PENDING"); req.put("createdAt", System.currentTimeMillis());
                     db.child("riderPayouts").push().setValue(req);
-                    toast("🎉 Payout request Admin ko bhej diya gaya!");
+                    toast("🎉 Payout request sent to Admin!");
                 })
-                .setNegativeButton("Cancel", null)
-                .show();
+                .setNegativeButton("Cancel", null).show();
     }
 
     private void showDepositDialog() {
-        if (netCashInHand <= 0) { toast("Koi COD cash deposit karne ko baaki nahi hai!"); return; }
+        if (netCashInHand <= 0) { toast("No COD cash balance to deposit!"); return; }
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(20), dp(12), dp(20), dp(8));
+        box.setPadding(RiderUiKit.dp(this, 20), RiderUiKit.dp(this, 12), RiderUiKit.dp(this, 20), RiderUiKit.dp(this, 8));
+
+        TextView balTv = new TextView(this);
+        balTv.setText(String.format(Locale.US, "COD Cash in Hand: ₹%.2f\nAdmin UPI: %s", netCashInHand, adminUpiId));
+        balTv.setTextColor(Color.parseColor("#16A34A")); balTv.setTypeface(null, Typeface.BOLD);
+        box.addView(balTv);
 
         final EditText etAmt = new EditText(this);
         etAmt.setInputType(InputType.TYPE_CLASS_NUMBER);
         etAmt.setText(String.valueOf((int) Math.min(Math.round(netCashInHand), maxRiderCodDeposit)));
-        etAmt.setHint("Deposit Amount (₹)");
         box.addView(etAmt);
 
-        String[] modes = {"UPI", "CASH"};
         final Spinner spMode = new Spinner(this);
-        spMode.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, modes));
+        spMode.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, new String[]{"UPI (Instant Pay)", "CASH (Office Handover)"}));
         box.addView(spMode);
 
         final EditText etUtr = new EditText(this);
-        etUtr.setHint("12-Digit UPI UTR (If UPI)");
+        etUtr.setHint("Exact 12-Digit UPI UTR No.");
         etUtr.setInputType(InputType.TYPE_CLASS_NUMBER);
         box.addView(etUtr);
 
-        Button btnPayUpi = makeBtn("📲 Open UPI App (" + adminUpiId + ")", "#0284C7", "#FFFFFF");
+        LinearLayout btnRow = new LinearLayout(this);
+        btnRow.setOrientation(LinearLayout.HORIZONTAL);
+        Button btnPayUpi = RiderUiKit.makeBtn(this, "📲 Open UPI", "#0284C7", "#FFFFFF", "#0284C7");
         btnPayUpi.setOnClickListener(v -> {
-            double amt = netCashInHand;
-            try { amt = Double.parseDouble(etAmt.getText().toString().trim()); } catch (Exception ignored) {}
+            double amt = netCashInHand; try { amt = Double.parseDouble(etAmt.getText().toString().trim()); } catch (Exception ignored) {}
             String uri = "upi://pay?pa=" + Uri.encode(adminUpiId) + "&pn=GossaigaonBazarAdmin&am=" + String.format(Locale.US, "%.2f", amt) + "&cu=INR";
-            try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(uri))); } catch (Exception e) { toast("UPI App nahi mila"); }
+            try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(uri))); } catch (Exception e) { toast("UPI App not found"); }
         });
-        box.addView(btnPayUpi);
+        btnRow.addView(btnPayUpi, new LinearLayout.LayoutParams(0, RiderUiKit.dp(this, 40), 1f));
+
+        Button btnCopy = RiderUiKit.makeBtn(this, "📋 Copy UPI", "#172238", "#38BDF8", "#38BDF8");
+        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(0, RiderUiKit.dp(this, 40), 1f);
+        cp.leftMargin = RiderUiKit.dp(this, 6);
+        btnCopy.setOnClickListener(v -> {
+            ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("Admin UPI", adminUpiId));
+            toast("Admin UPI copied!");
+        });
+        btnRow.addView(btnCopy, cp);
+        box.addView(btnRow);
 
         new AlertDialog.Builder(this)
-                .setTitle("Deposit COD Cash to Admin")
-                .setView(box)
+                .setTitle("Deposit COD Cash to Admin").setView(box)
                 .setPositiveButton("Submit Handover", (d, w) -> {
-                    double amt;
-                    try { amt = Double.parseDouble(etAmt.getText().toString().trim()); } catch (Exception e) { amt = 0; }
-                    String mode = spMode.getSelectedItem().toString();
+                    double amt; try { amt = Double.parseDouble(etAmt.getText().toString().trim()); } catch (Exception e) { amt = 0; }
+                    String mode = spMode.getSelectedItemPosition() == 0 ? "UPI" : "CASH";
                     String utr = etUtr.getText().toString().trim();
-                    if (amt < minRiderCodDeposit || amt > maxRiderCodDeposit) {
-                        toast(String.format(Locale.US, "Limit: ₹%.0f - ₹%.0f", minRiderCodDeposit, maxRiderCodDeposit));
-                        return;
-                    }
-                    if (amt > netCashInHand) { toast("Amount cash in hand se zyada hai!"); return; }
+                    if (amt < minRiderCodDeposit || amt > maxRiderCodDeposit || amt > netCashInHand) { toast("Invalid deposit amount!"); return; }
                     if ("UPI".equals(mode)) {
                         String err = TripHelper.validateSettlementUtr(utr, allExistingUtrs);
                         if (err != null) { toast(err); return; }
                     }
                     Map<String, Object> s = new HashMap<>();
-                    s.put("riderUid", currentUser.getUid());
-                    s.put("riderName", riderName);
-                    s.put("amount", amt);
-                    s.put("mode", mode);
-                    s.put("utr", "UPI".equals(mode) ? utr : "PHYSICAL_HANDOVER");
-                    s.put("status", "PENDING");
-                    s.put("createdAt", System.currentTimeMillis());
+                    s.put("riderUid", currentUser.getUid()); s.put("riderName", riderName); s.put("amount", amt);
+                    s.put("mode", mode); s.put("utr", "UPI".equals(mode) ? utr : "PHYSICAL_HANDOVER");
+                    s.put("status", "PENDING"); s.put("createdAt", System.currentTimeMillis());
                     db.child("settlements").push().setValue(s);
-                    toast("🎉 Handover Admin ko bhej diya gaya!");
+                    toast("🎉 Handover submitted to Admin!");
                 })
-                .setNegativeButton("Cancel", null)
-                .show();
+                .setNegativeButton("Cancel", null).show();
     }
 
     private void showFeedbackDialog() {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(20), dp(12), dp(20), dp(8));
-
-        final EditText etSub = new EditText(this);
-        etSub.setHint("Subject (e.g. Payout / Route Issue)");
-        box.addView(etSub);
-
-        final EditText etMsg = new EditText(this);
-        etMsg.setHint("Message");
-        box.addView(etMsg);
+        box.setPadding(RiderUiKit.dp(this, 20), RiderUiKit.dp(this, 12), RiderUiKit.dp(this, 20), RiderUiKit.dp(this, 8));
+        final EditText etSub = new EditText(this); etSub.setHint("Subject"); box.addView(etSub);
+        final EditText etMsg = new EditText(this); etMsg.setHint("Message"); box.addView(etMsg);
 
         new AlertDialog.Builder(this)
-                .setTitle("Send Feedback to Admin")
-                .setView(box)
+                .setTitle("Send Feedback to Admin").setView(box)
                 .setPositiveButton("Send", (d, w) -> {
-                    String sub = etSub.getText().toString().trim();
-                    String msg = etMsg.getText().toString().trim();
+                    String sub = etSub.getText().toString().trim(), msg = etMsg.getText().toString().trim();
                     if (sub.isEmpty() || msg.isEmpty()) { toast("Subject aur Message bharein!"); return; }
                     Map<String, Object> fb = new HashMap<>();
-                    fb.put("role", "RIDER");
-                    fb.put("uid", currentUser.getUid());
-                    fb.put("name", riderName);
-                    fb.put("phone", riderPhone);
-                    fb.put("subject", sub);
-                    fb.put("message", msg);
-                    fb.put("status", "OPEN");
-                    fb.put("createdAt", System.currentTimeMillis());
+                    fb.put("role", "RIDER"); fb.put("uid", currentUser.getUid()); fb.put("name", riderName);
+                    fb.put("phone", riderPhone); fb.put("subject", sub); fb.put("message", msg);
+                    fb.put("status", "OPEN"); fb.put("createdAt", System.currentTimeMillis());
                     db.child("feedbacks").push().setValue(fb);
-                    toast("💬 Ticket Admin ko bhej diya gaya!");
+                    toast("💬 Ticket sent to Admin Hub!");
                 })
-                .setNegativeButton("Cancel", null)
-                .show();
+                .setNegativeButton("Cancel", null).show();
     }
 
     private void toggleDuty() {
         if (riderSuspended) { toast("🚫 Account suspended by Admin!"); return; }
         boolean next = !riderOnline;
-        if (next && netCashInHand >= maxCashLimit) {
-            toast(String.format(Locale.US, "🛑 Cash Limit ₹%.0f exceeded! Deposit first.", maxCashLimit));
-            return;
-        }
+        if (next && netCashInHand >= maxCashLimit) { toast("🛑 Cash Limit Exceeded! Deposit cash first."); return; }
         Map<String, Object> up = new HashMap<>();
-        up.put("online", next);
-        up.put("lastSeen", System.currentTimeMillis());
+        up.put("online", next); up.put("lastSeen", System.currentTimeMillis());
         db.child("deliveryPartners").child(currentUser.getUid()).updateChildren(up);
-        toast(next ? "Duty ON: Live 5s GPS Active!" : "Duty OFF: Shift Ended.");
+        toast(next ? "Duty ON: Live 5s GPS active!" : "Duty OFF: Shift Ended.");
     }
 
     private void saveProfile() {
-        String n = etProfName.getText().toString().trim();
-        String p = etProfPhone.getText().toString().trim();
-        String u = etProfUpi.getText().toString().trim();
-        String v = etProfVehicle.getText().toString().trim();
+        String n = etProfName.getText().toString().trim(), p = etProfPhone.getText().toString().trim(),
+                u = etProfUpi.getText().toString().trim(), v = etProfVehicle.getText().toString().trim();
         if (!TripHelper.isValidIndianMobile(p)) { toast("Valid 10-digit mobile enter karein!"); return; }
         if (!TripHelper.isValidUpiId(u)) { toast("Valid UPI ID enter karein!"); return; }
-
         Map<String, Object> up = new HashMap<>();
-        up.put("name", n);
-        up.put("phone", p);
-        up.put("upiId", u);
-        up.put("vehicle", v);
-        up.put("updatedAt", System.currentTimeMillis());
+        up.put("name", n); up.put("phone", p); up.put("upiId", u); up.put("vehicle", v); up.put("updatedAt", System.currentTimeMillis());
         db.child("deliveryPartners").child(currentUser.getUid()).updateChildren(up);
-        toast("✅ Rider profile & UPI ID saved!");
+        toast("Rider profile & UPI ID saved!");
     }
 
     private void logoutRider() {
@@ -1414,11 +1047,24 @@ public class MainActivity extends AppCompatActivity {
         finish();
     }
 
-    private void openGoogleMaps(double lat, double lng, String fallbackQuery) {
-        String uri = (lat != 0 && lng != 0)
-                ? "https://www.google.com/maps/dir/?api=1&destination=" + lat + "," + lng
+    @Override
+    public void onOpenMaps(double lat, double lng, String fallbackQuery) {
+        String uri = (lat != 0 && lng != 0) ? "https://www.google.com/maps/dir/?api=1&destination=" + lat + "," + lng
                 : "https://www.google.com/maps/dir/?api=1&destination=" + Uri.encode(fallbackQuery);
-        try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(uri))); } catch (Exception e) { toast("Google Maps nahi khul saka"); }
+        try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(uri))); } catch (Exception e) { toast("Google Maps not found"); }
+    }
+
+    @Override
+    public void onDialPhone(String phone) {
+        try { startActivity(new Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + phone))); } catch (Exception ignored) {}
+    }
+
+    @Override
+    public void onOpenWhatsApp(String rawPhone) {
+        String digits = rawPhone.replaceAll("\\D", "");
+        if (digits.length() == 10) digits = "91" + digits;
+        String url = "https://wa.me/" + digits + "?text=" + Uri.encode("Namaste! Gossaigaon Bazar rider arriving with your order.");
+        try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); } catch (Exception e) { toast("WhatsApp not found"); }
     }
 
     private void playAlertChime() {
@@ -1431,68 +1077,6 @@ public class MainActivity extends AppCompatActivity {
 
     private void setIfUnfocused(EditText et, String val) {
         if (!et.hasFocus()) et.setText(val);
-    }
-
-    private View makeLogRow(String title, String sub, String badge, String badgeColor) {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setBackgroundColor(Color.parseColor("#0F172A"));
-        row.setPadding(dp(12), dp(10), dp(12), dp(10));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-        lp.bottomMargin = dp(8);
-        row.setLayoutParams(lp);
-
-        LinearLayout left = new LinearLayout(this);
-        left.setOrientation(LinearLayout.VERTICAL);
-        TextView t1 = new TextView(this);
-        t1.setText(title);
-        t1.setTextColor(Color.WHITE);
-        t1.setTextSize(14);
-        t1.setTypeface(null, android.graphics.Typeface.BOLD);
-        left.addView(t1);
-
-        TextView t2 = new TextView(this);
-        t2.setText(sub);
-        t2.setTextColor(Color.parseColor("#94A3B8"));
-        t2.setTextSize(12);
-        left.addView(t2);
-        row.addView(left, new LinearLayout.LayoutParams(0, -2, 1f));
-
-        TextView right = new TextView(this);
-        right.setText(badge);
-        right.setTextColor(Color.parseColor(badgeColor));
-        right.setTextSize(12);
-        right.setTypeface(null, android.graphics.Typeface.BOLD);
-        row.addView(right);
-        return row;
-    }
-
-    private TextView makeEmptyText(String msg) {
-        TextView tv = new TextView(this);
-        tv.setText(msg);
-        tv.setTextColor(Color.parseColor("#94A3B8"));
-        tv.setGravity(android.view.Gravity.CENTER);
-        tv.setPadding(dp(12), dp(20), dp(12), dp(20));
-        return tv;
-    }
-
-    private Button makeBtn(String text, String bgHex, String textHex) {
-        Button b = new Button(this);
-        b.setText(text);
-        b.setAllCaps(false);
-        b.setTextSize(12);
-        b.setTypeface(null, android.graphics.Typeface.BOLD);
-        b.setTextColor(Color.parseColor(textHex));
-        b.setBackgroundColor(Color.parseColor(bgHex));
-        return b;
-    }
-
-    private String shortId(String s) {
-        return s != null && s.length() > 6 ? s.substring(s.length() - 6) : (s != null ? s : "");
-    }
-
-    private int dp(int v) {
-        return Math.round(v * getResources().getDisplayMetrics().density);
     }
 
     private void toast(String msg) {
