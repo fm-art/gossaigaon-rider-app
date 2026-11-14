@@ -2,14 +2,17 @@ package com.gossaigaon.rider;
 
 import android.Manifest;
 import android.app.AlertDialog;
+import android.app.NotificationManager;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Typeface;
-import android.media.Ringtone;
+import android.media.AudioAttributes;
+import android.media.MediaPlayer;
 import android.media.RingtoneManager;
 import android.net.Uri;
 import android.os.Build;
@@ -22,9 +25,11 @@ import android.text.InputType;
 import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
+import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
@@ -45,6 +50,9 @@ import com.google.firebase.database.DatabaseError;
 import com.google.firebase.database.DatabaseReference;
 import com.google.firebase.database.FirebaseDatabase;
 import com.google.firebase.database.ValueEventListener;
+import com.google.zxing.BarcodeFormat;
+import com.google.zxing.MultiFormatWriter;
+import com.google.zxing.common.BitMatrix;
 
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -61,6 +69,7 @@ import java.util.Set;
 public class MainActivity extends AppCompatActivity implements RiderUiKit.TripActionListener {
 
     private static final int REQ_PERMS = 201;
+    public static volatile boolean isAppInForeground = false;
 
     private FirebaseAuth mAuth;
     private DatabaseReference db;
@@ -82,7 +91,7 @@ public class MainActivity extends AppCompatActivity implements RiderUiKit.TripAc
     private EditText etProfName, etProfEmail, etProfPhone, etProfUpi, etProfVehicle;
 
     private int activeTabIndex = 0;
-    private boolean soundEnabled = true, gpsServiceActive = false;
+    private boolean soundEnabled = true, gpsServiceActive = false, isRinging = false;
     private boolean riderApproved = false, riderOnline = false, riderSuspended = false;
     private String riderName = "Gossaigaon Rider", riderPhone = "", riderUpi = "", riderVehicle = "Bike";
     private double riderLat = 26.4524, riderLng = 89.9723;
@@ -96,7 +105,8 @@ public class MainActivity extends AppCompatActivity implements RiderUiKit.TripAc
 
     private double netCashInHand = 0, availablePayoutBalance = 0;
     private double approvedSettlementsTotal = 0, paidPayoutsTotal = 0;
-    private int prevActiveCount = -1;
+
+    private MediaPlayer alertPlayer;
 
     private final Map<String, TripHelper.StoreData> storesMap = new HashMap<>();
     private final List<TripHelper.OrderData> myActiveOrders = new ArrayList<>();
@@ -144,6 +154,21 @@ public class MainActivity extends AppCompatActivity implements RiderUiKit.TripAc
                 else moveTaskToBack(true);
             }
         });
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        isAppInForeground = true;
+        NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm != null) nm.cancel(LocationForegroundService.NOTIF_ORDER_ID);
+        evaluateOrderRingtone();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        isAppInForeground = false;
     }
 
     private void bindViews() {
@@ -244,6 +269,7 @@ public class MainActivity extends AppCompatActivity implements RiderUiKit.TripAc
         btnSoundToggle.setOnClickListener(v -> {
             soundEnabled = !soundEnabled;
             btnSoundToggle.setText(soundEnabled ? "🔊" : "🔇");
+            evaluateOrderRingtone();
             toast(soundEnabled ? "Trip chime: ON" : "Trip chime: MUTED");
         });
 
@@ -452,11 +478,7 @@ public class MainActivity extends AppCompatActivity implements RiderUiKit.TripAc
                     if ("DELIVERED".equals(o.status) || "CANCELLED".equals(o.status)) myCompletedOrders.add(o);
                     else myActiveOrders.add(o);
                 }
-                if (prevActiveCount != -1 && myActiveOrders.size() > prevActiveCount) {
-                    playAlertChime();
-                    toast("🔔 New grocery trip assigned!");
-                }
-                prevActiveCount = myActiveOrders.size();
+                evaluateOrderRingtone();
                 recalculateFinancials();
                 renderTripsUI();
                 renderCompletedTripsUI();
@@ -564,6 +586,55 @@ public class MainActivity extends AppCompatActivity implements RiderUiKit.TripAc
         });
     }
 
+    // CONTINUOUS LOOPING RINGTONE UNTIL ACCEPTED OR PASSED
+    private void evaluateOrderRingtone() {
+        boolean hasUnaccepted = false;
+        for (TripHelper.OrderData o : myActiveOrders) {
+            if (!Boolean.TRUE.equals(o.riderAccepted)) {
+                hasUnaccepted = true;
+                break;
+            }
+        }
+        if (hasUnaccepted && soundEnabled) {
+            startLoopingRingtone();
+        } else {
+            stopLoopingRingtone();
+        }
+    }
+
+    private void startLoopingRingtone() {
+        if (isRinging) return;
+        try {
+            Uri ringUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
+            if (ringUri == null) ringUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM);
+            if (ringUri == null) ringUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
+
+            alertPlayer = new MediaPlayer();
+            alertPlayer.setDataSource(getApplicationContext(), ringUri);
+            alertPlayer.setAudioAttributes(new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build());
+            alertPlayer.setLooping(true);
+            alertPlayer.prepare();
+            alertPlayer.start();
+            isRinging = true;
+        } catch (Exception e) {
+            stopLoopingRingtone();
+        }
+    }
+
+    private void stopLoopingRingtone() {
+        isRinging = false;
+        if (alertPlayer != null) {
+            try {
+                if (alertPlayer.isPlaying()) alertPlayer.stop();
+                alertPlayer.release();
+            } catch (Exception ignored) {}
+            alertPlayer = null;
+        }
+    }
+
     private TripHelper.OrderData parseOrder(DataSnapshot ds) {
         TripHelper.OrderData o = new TripHelper.OrderData();
         o.orderId = ds.getKey();
@@ -663,6 +734,7 @@ public class MainActivity extends AppCompatActivity implements RiderUiKit.TripAc
     @Override
     public void onAcceptTrip(TripHelper.TripGroup trip) {
         if (riderSuspended) { toast("Account suspended!"); return; }
+        stopLoopingRingtone();
         long now = System.currentTimeMillis();
         for (TripHelper.OrderData o : trip.orders) {
             Map<String, Object> up = new HashMap<>();
@@ -704,6 +776,7 @@ public class MainActivity extends AppCompatActivity implements RiderUiKit.TripAc
             toast("🔒 Store se pickup ke baad order cancel/pass nahi ho sakta!");
             return;
         }
+        stopLoopingRingtone();
         toast("Nearest rider to store dhoondh rahe hain...");
         db.child("deliveryPartners").addListenerForSingleValueEvent(new ValueEventListener() {
             @Override
@@ -926,43 +999,69 @@ public class MainActivity extends AppCompatActivity implements RiderUiKit.TripAc
                 .setNegativeButton("Cancel", null).show();
     }
 
+    // DEPOSIT COD WITH LIVE NATIVE QR CODE GENERATOR
     private void showDepositDialog() {
         if (netCashInHand <= 0) { toast("No COD cash balance to deposit!"); return; }
+
+        ScrollView sv = new ScrollView(this);
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(RiderUiKit.dp(this, 20), RiderUiKit.dp(this, 12), RiderUiKit.dp(this, 20), RiderUiKit.dp(this, 8));
+        sv.addView(box);
 
         TextView balTv = new TextView(this);
-        balTv.setText(String.format(Locale.US, "COD Cash in Hand: ₹%.2f\nAdmin UPI: %s", netCashInHand, adminUpiId));
-        balTv.setTextColor(Color.parseColor("#16A34A")); balTv.setTypeface(null, Typeface.BOLD);
+        balTv.setText(String.format(Locale.US, "Total COD Cash in Hand: ₹%.2f\nLimits: ₹%.0f - ₹%.0f", netCashInHand, minRiderCodDeposit, maxRiderCodDeposit));
+        balTv.setTextColor(Color.parseColor("#16A34A"));
+        balTv.setTypeface(null, Typeface.BOLD);
+        balTv.setPadding(0, 0, 0, RiderUiKit.dp(this, 8));
         box.addView(balTv);
 
         final EditText etAmt = new EditText(this);
         etAmt.setInputType(InputType.TYPE_CLASS_NUMBER);
         etAmt.setText(String.valueOf((int) Math.min(Math.round(netCashInHand), maxRiderCodDeposit)));
+        etAmt.setHint("Deposit Amount (₹)");
         box.addView(etAmt);
 
         final Spinner spMode = new Spinner(this);
-        spMode.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, new String[]{"UPI (Instant Pay)", "CASH (Office Handover)"}));
+        spMode.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item, new String[]{"UPI (Scan QR / App Pay)", "CASH (Office Handover)"}));
         box.addView(spMode);
 
-        final EditText etUtr = new EditText(this);
-        etUtr.setHint("Exact 12-Digit UPI UTR No.");
-        etUtr.setInputType(InputType.TYPE_CLASS_NUMBER);
-        box.addView(etUtr);
+        // UPI QR SECTION
+        final LinearLayout upiSection = new LinearLayout(this);
+        upiSection.setOrientation(LinearLayout.VERTICAL);
+        upiSection.setGravity(Gravity.CENTER_HORIZONTAL);
+        upiSection.setPadding(0, RiderUiKit.dp(this, 8), 0, RiderUiKit.dp(this, 4));
+
+        TextView tvUpiId = new TextView(this);
+        tvUpiId.setText("Admin UPI: " + adminUpiId);
+        tvUpiId.setTextColor(Color.parseColor("#0284C7"));
+        tvUpiId.setTypeface(null, Typeface.BOLD);
+        tvUpiId.setPadding(0, 0, 0, RiderUiKit.dp(this, 6));
+        upiSection.addView(tvUpiId);
+
+        final ImageView ivQr = new ImageView(this);
+        int qrPx = RiderUiKit.dp(this, 180);
+        LinearLayout.LayoutParams qrp = new LinearLayout.LayoutParams(qrPx, qrPx);
+        qrp.bottomMargin = RiderUiKit.dp(this, 10);
+        ivQr.setLayoutParams(qrp);
+        ivQr.setBackgroundColor(Color.WHITE);
+        int pad = RiderUiKit.dp(this, 8);
+        ivQr.setPadding(pad, pad, pad, pad);
+        upiSection.addView(ivQr);
 
         LinearLayout btnRow = new LinearLayout(this);
         btnRow.setOrientation(LinearLayout.HORIZONTAL);
-        Button btnPayUpi = RiderUiKit.makeBtn(this, "📲 Open UPI", "#0284C7", "#FFFFFF", "#0284C7");
+        Button btnPayUpi = RiderUiKit.makeBtn(this, "📲 Open UPI App", "#0284C7", "#FFFFFF", "#0284C7");
         btnPayUpi.setOnClickListener(v -> {
-            double amt = netCashInHand; try { amt = Double.parseDouble(etAmt.getText().toString().trim()); } catch (Exception ignored) {}
-            String uri = "upi://pay?pa=" + Uri.encode(adminUpiId) + "&pn=GossaigaonBazarAdmin&am=" + String.format(Locale.US, "%.2f", amt) + "&cu=INR";
+            double amt = netCashInHand;
+            try { amt = Double.parseDouble(etAmt.getText().toString().trim()); } catch (Exception ignored) {}
+            String uri = "upi://pay?pa=" + Uri.encode(adminUpiId) + "&pn=GossaigaonBazarAdmin&am=" + String.format(Locale.US, "%.2f", Math.max(1, amt)) + "&cu=INR";
             try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(uri))); } catch (Exception e) { toast("UPI App not found"); }
         });
         btnRow.addView(btnPayUpi, new LinearLayout.LayoutParams(0, RiderUiKit.dp(this, 40), 1f));
 
         Button btnCopy = RiderUiKit.makeBtn(this, "📋 Copy UPI", "#172238", "#38BDF8", "#38BDF8");
-        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(0, RiderUiKit.dp(this, 40), 1f);
+        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(0, RiderUiKit.dp(this, 40), 0.9f);
         cp.leftMargin = RiderUiKit.dp(this, 6);
         btnCopy.setOnClickListener(v -> {
             ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
@@ -970,11 +1069,53 @@ public class MainActivity extends AppCompatActivity implements RiderUiKit.TripAc
             toast("Admin UPI copied!");
         });
         btnRow.addView(btnCopy, cp);
-        box.addView(btnRow);
+        upiSection.addView(btnRow, new LinearLayout.LayoutParams(-1, -2));
+
+        final EditText etUtr = new EditText(this);
+        etUtr.setHint("Enter Exact 12-Digit UPI UTR No.");
+        etUtr.setInputType(InputType.TYPE_CLASS_NUMBER);
+        etUtr.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams utrp = new LinearLayout.LayoutParams(-1, -2);
+        utrp.topMargin = RiderUiKit.dp(this, 8);
+        upiSection.addView(etUtr, utrp);
+
+        box.addView(upiSection);
+
+        // OFFICE CASH SECTION
+        final TextView tvCashNote = new TextView(this);
+        tvCashNote.setText("📍 Hand over exact COD cash at Gossaigaon Bazar Hub Office and tap Submit.");
+        tvCashNote.setPadding(RiderUiKit.dp(this, 10), RiderUiKit.dp(this, 12), RiderUiKit.dp(this, 10), RiderUiKit.dp(this, 12));
+        tvCashNote.setVisibility(View.GONE);
+        box.addView(tvCashNote);
+
+        Runnable refreshQr = () -> {
+            double amt = netCashInHand;
+            try { amt = Double.parseDouble(etAmt.getText().toString().trim()); } catch (Exception ignored) {}
+            if (amt <= 0) amt = netCashInHand;
+            String upiString = "upi://pay?pa=" + Uri.encode(adminUpiId) + "&pn=GossaigaonBazarAdmin&am=" + String.format(Locale.US, "%.2f", amt) + "&cu=INR";
+            Bitmap qrBmp = generateQrBitmap(upiString, 360);
+            if (qrBmp != null) ivQr.setImageBitmap(qrBmp);
+        };
+        refreshQr.run();
+
+        etAmt.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) { refreshQr.run(); }
+            @Override public void afterTextChanged(Editable s) {}
+        });
+
+        spMode.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int pos, long id) {
+                upiSection.setVisibility(pos == 0 ? View.VISIBLE : View.GONE);
+                tvCashNote.setVisibility(pos == 1 ? View.VISIBLE : View.GONE);
+            }
+            @Override public void onNothingSelected(AdapterView<?> parent) {}
+        });
 
         new AlertDialog.Builder(this)
-                .setTitle("Deposit COD Cash to Admin").setView(box)
-                .setPositiveButton("Submit Handover", (d, w) -> {
+                .setTitle("Deposit COD Cash to Admin").setView(sv)
+                .setPositiveButton("Submit Verified Handover", (d, w) -> {
                     double amt; try { amt = Double.parseDouble(etAmt.getText().toString().trim()); } catch (Exception e) { amt = 0; }
                     String mode = spMode.getSelectedItemPosition() == 0 ? "UPI" : "CASH";
                     String utr = etUtr.getText().toString().trim();
@@ -991,6 +1132,24 @@ public class MainActivity extends AppCompatActivity implements RiderUiKit.TripAc
                     toast("🎉 Handover submitted to Admin!");
                 })
                 .setNegativeButton("Cancel", null).show();
+    }
+
+    private Bitmap generateQrBitmap(String text, int sizePx) {
+        try {
+            BitMatrix matrix = new MultiFormatWriter().encode(text, BarcodeFormat.QR_CODE, sizePx, sizePx);
+            int[] pixels = new int[sizePx * sizePx];
+            for (int y = 0; y < sizePx; y++) {
+                int offset = y * sizePx;
+                for (int x = 0; x < sizePx; x++) {
+                    pixels[offset + x] = matrix.get(x, y) ? Color.BLACK : Color.WHITE;
+                }
+            }
+            Bitmap bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.RGB_565);
+            bmp.setPixels(pixels, 0, sizePx, 0, 0, sizePx, sizePx);
+            return bmp;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private void showFeedbackDialog() {
@@ -1037,6 +1196,7 @@ public class MainActivity extends AppCompatActivity implements RiderUiKit.TripAc
     }
 
     private void logoutRider() {
+        stopLoopingRingtone();
         gpsServiceActive = false;
         Intent i = new Intent(this, LocationForegroundService.class);
         i.setAction(LocationForegroundService.ACTION_STOP);
@@ -1067,14 +1227,6 @@ public class MainActivity extends AppCompatActivity implements RiderUiKit.TripAc
         try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); } catch (Exception e) { toast("WhatsApp not found"); }
     }
 
-    private void playAlertChime() {
-        if (!soundEnabled) return;
-        try {
-            Ringtone r = RingtoneManager.getRingtone(getApplicationContext(), RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION));
-            if (r != null) r.play();
-        } catch (Exception ignored) {}
-    }
-
     private void setIfUnfocused(EditText et, String val) {
         if (!et.hasFocus()) et.setText(val);
     }
@@ -1085,6 +1237,7 @@ public class MainActivity extends AppCompatActivity implements RiderUiKit.TripAc
 
     @Override
     protected void onDestroy() {
+        stopLoopingRingtone();
         timerHandler.removeCallbacks(countdownTask);
         super.onDestroy();
     }
