@@ -2,6 +2,7 @@ package com.gossaigaon.rider;
 
 import android.content.Intent;
 import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.view.View;
 import android.widget.Button;
@@ -59,6 +60,13 @@ public class AuthActivity extends AppCompatActivity {
         Button btnLogin = findViewById(R.id.btnLogin);
         Button btnSignup = findViewById(R.id.btnSignup);
 
+        findViewById(R.id.layoutAuthTabs).setBackground(roundedBox("#0F172A", "#24344D", 14));
+        EditText[] inputs = {etLoginEmail, etLoginPass, etRegName, etRegEmail, etRegPhone, etRegUpi, etRegVehicle, etRegPass};
+        for (EditText et : inputs) et.setBackground(roundedBox("#0F172A", "#24344D", 12));
+        btnLogin.setBackground(roundedBox("#16A34A", "#16A34A", 14));
+        btnSignup.setBackground(roundedBox("#16A34A", "#16A34A", 14));
+        switchTab(true);
+
         tabLogin.setOnClickListener(v -> switchTab(true));
         tabSignup.setOnClickListener(v -> switchTab(false));
 
@@ -66,13 +74,21 @@ public class AuthActivity extends AppCompatActivity {
         btnSignup.setOnClickListener(v -> attemptSignup());
     }
 
+    private GradientDrawable roundedBox(String bgHex, String borderHex, int radiusDp) {
+        GradientDrawable gd = new GradientDrawable();
+        gd.setColor(Color.parseColor(bgHex));
+        gd.setCornerRadius(radiusDp * getResources().getDisplayMetrics().density);
+        gd.setStroke(Math.round(1.2f * getResources().getDisplayMetrics().density), Color.parseColor(borderHex));
+        return gd;
+    }
+
     private void switchTab(boolean isLogin) {
         tvError.setText("");
         layoutLogin.setVisibility(isLogin ? View.VISIBLE : View.GONE);
         layoutSignup.setVisibility(isLogin ? View.GONE : View.VISIBLE);
-        tabLogin.setBackgroundColor(isLogin ? Color.parseColor("#16A34A") : Color.TRANSPARENT);
+        tabLogin.setBackground(isLogin ? roundedBox("#16A34A", "#16A34A", 10) : null);
         tabLogin.setTextColor(isLogin ? Color.WHITE : Color.parseColor("#94A3B8"));
-        tabSignup.setBackgroundColor(!isLogin ? Color.parseColor("#16A34A") : Color.TRANSPARENT);
+        tabSignup.setBackground(!isLogin ? roundedBox("#16A34A", "#16A34A", 10) : null);
         tabSignup.setTextColor(!isLogin ? Color.WHITE : Color.parseColor("#94A3B8"));
     }
 
