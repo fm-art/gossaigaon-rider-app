@@ -32,15 +32,16 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - name: 5. Install Dependencies (Using bun.lock)
-        run: bun install
+      - name: 5. Install Dependencies & Capacitor Plugins
+        run: |
+          bun install
+          bun add @capacitor/core@8 @capacitor/android@8 @capacitor/cli@8 @capacitor/local-notifications@8 @capacitor/push-notifications@8
 
       - name: 6. Build Web App (Vite)
         run: bun run build
 
-      - name: 7. Install Capacitor & Create Android Project
+      - name: 7. Create Android Project
         run: |
-          bun add @capacitor/core @capacitor/android @capacitor/cli
           if [ ! -d "android" ]; then
             bunx cap add android
           fi
@@ -82,7 +83,7 @@ jobs:
           }
           EOF
 
-      - name: 9. Sync Web Files into Android
+      - name: 9. Sync Web Files & Plugins into Android
         run: bunx cap sync android
 
       - name: 10. Build APK File
