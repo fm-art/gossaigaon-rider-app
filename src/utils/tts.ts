@@ -1,3 +1,5 @@
+import {Capacitor} from '@capacitor/core';
+import {TextToSpeech} from '@capacitor-community/text-to-speech';
 import type {StoreInfo, TripGroup} from '../types/rider';
 import {calculateOptimalDeliverySequence} from './riderLogic';
 import {sanitizeInput} from './security';
@@ -69,6 +71,9 @@ export function isTtsSupported(win?: {
   speechSynthesis?: unknown;
   SpeechSynthesisUtterance?: unknown;
 } | null): boolean {
+  if (win === undefined && Capacitor.isNativePlatform()) {
+    return true;
+  }
   const target = win === undefined ? (typeof window !== 'undefined' ? window : null) : win;
   return Boolean(
     target &&
@@ -153,6 +158,10 @@ export function buildIncomingTripAnnouncement(
 }
 
 export function cancelTripSpeech(speechApi?: SpeechSynthesisLike | null): void {
+  if (speechApi === undefined && Capacitor.isNativePlatform()) {
+    void TextToSpeech.stop().catch(() => undefined);
+    return;
+  }
   try {
     const api =
       speechApi === undefined
@@ -165,6 +174,37 @@ export function cancelTripSpeech(speechApi?: SpeechSynthesisLike | null): void {
     }
   } catch {
     // Ignore speech synthesis cancel errors
+  }
+}
+
+async function speakNativeTts(
+  text: string,
+  lang: string,
+  rate: number,
+  pitch: number,
+  volume: number,
+): Promise<void> {
+  try {
+    await TextToSpeech.speak({
+      text,
+      lang,
+      rate,
+      pitch,
+      volume,
+      category: 'ambient',
+      queueStrategy: 1,
+    });
+  } catch {
+    // Fallback to en-US if en-IN voice pack is not downloaded on device
+    await TextToSpeech.speak({
+      text,
+      lang: 'en-US',
+      rate,
+      pitch,
+      volume,
+      category: 'ambient',
+      queueStrategy: 1,
+    }).catch(() => undefined);
   }
 }
 
@@ -189,6 +229,18 @@ export function speakTripAnnouncement(rawText: string, options: SpeakOptions = {
     return {spoken: false, text: cleanText, reason: 'cooldown'};
   }
 
+  const targetLang = options.lang ?? 'en-IN';
+  const rate = options.rate ?? 0.98;
+  const pitch = options.pitch ?? 1.0;
+  const volume = options.volume ?? 1.0;
+
+  if (options.speechApi === undefined && Capacitor.isNativePlatform()) {
+    lastSpokenAtMs = now;
+    lastSpokenText = cleanText;
+    void speakNativeTts(cleanText, targetLang, rate, pitch, volume);
+    return {spoken: true, text: cleanText};
+  }
+
   const speechApi =
     options.speechApi !== undefined
       ? options.speechApi
@@ -209,11 +261,10 @@ export function speakTripAnnouncement(rawText: string, options: SpeakOptions = {
   try {
     speechApi.cancel?.();
     const utterance = createUtterance(cleanText);
-    const targetLang = options.lang ?? 'en-IN';
     utterance.lang = targetLang;
-    utterance.rate = options.rate ?? 0.98;
-    utterance.pitch = options.pitch ?? 1.0;
-    utterance.volume = options.volume ?? 1.0;
+    utterance.rate = rate;
+    utterance.pitch = pitch;
+    utterance.volume = volume;
 
     if (typeof speechApi.getVoices === 'function') {
       const voices = speechApi.getVoices();
