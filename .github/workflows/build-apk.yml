@@ -29,8 +29,8 @@ jobs:
 
       - name: 4. Install Packages & Capacitor
         run: |
-          npm install
-          npm install --no-save @capacitor/core @capacitor/android @capacitor/cli
+          npm install --legacy-peer-deps
+          npm install --no-save --legacy-peer-deps @capacitor/core @capacitor/android @capacitor/cli
 
       - name: 5. Build Web App (Vite)
         run: npm run build
@@ -47,7 +47,6 @@ jobs:
           import fs from 'node:fs';
           import path from 'node:path';
 
-          // Firebase google-services.json copy
           const fbSrc = path.join('public', 'assets', 'aistudio', 'google-services_1bf7436c.json');
           const fbDest = path.join('android', 'app', 'google-services.json');
           if (fs.existsSync(fbSrc)) {
@@ -55,7 +54,6 @@ jobs:
             console.log('Firebase google-services.json copied!');
           }
 
-          // AndroidManifest.xml me permissions add karein
           const manifestPath = path.join('android', 'app', 'src', 'main', 'AndroidManifest.xml');
           let manifest = fs.readFileSync(manifestPath, 'utf8');
           const permissions = [
