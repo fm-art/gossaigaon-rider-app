@@ -1,0 +1,97 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    name: Build Rider APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 1. Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 2. Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 3. Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: 4. Install Packages & Capacitor
+        run: |
+          npm install
+          npm install --no-save @capacitor/core @capacitor/android @capacitor/cli
+
+      - name: 5. Build Web App (Vite)
+        run: npm run build
+
+      - name: 6. Create Android Project
+        run: |
+          if [ ! -d "android" ]; then
+            npx cap add android
+          fi
+
+      - name: 7. Add Firebase & Phone Permissions (GPS, Camera, Notification)
+        run: |
+          node --input-type=module << 'EOF'
+          import fs from 'node:fs';
+          import path from 'node:path';
+
+          // Firebase google-services.json copy
+          const fbSrc = path.join('public', 'assets', 'aistudio', 'google-services_1bf7436c.json');
+          const fbDest = path.join('android', 'app', 'google-services.json');
+          if (fs.existsSync(fbSrc)) {
+            fs.copyFileSync(fbSrc, fbDest);
+            console.log('Firebase google-services.json copied!');
+          }
+
+          // AndroidManifest.xml me permissions add karein
+          const manifestPath = path.join('android', 'app', 'src', 'main', 'AndroidManifest.xml');
+          let manifest = fs.readFileSync(manifestPath, 'utf8');
+          const permissions = [
+            'android.permission.INTERNET',
+            'android.permission.ACCESS_NETWORK_STATE',
+            'android.permission.ACCESS_COARSE_LOCATION',
+            'android.permission.ACCESS_FINE_LOCATION',
+            'android.permission.CAMERA',
+            'android.permission.POST_NOTIFICATIONS',
+            'android.permission.VIBRATE',
+          ];
+
+          const missing = permissions
+            .filter((p) => !manifest.includes(p))
+            .map((p) => `    <uses-permission android:name="${p}" />`)
+            .join('\n');
+
+          if (missing) {
+            manifest = manifest.replace('<application', `${missing}\n\n    <application`);
+            fs.writeFileSync(manifestPath, manifest, 'utf8');
+            console.log('Permissions added!');
+          }
+          EOF
+
+      - name: 8. Sync Web Files into Android
+        run: npx cap sync android
+
+      - name: 9. Build APK File
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: 10. Upload APK for Download
+        uses: actions/upload-artifact@v4
+        with:
+          name: gossaigaon-fleet-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
