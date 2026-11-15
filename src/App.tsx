@@ -120,6 +120,27 @@ declare global {
   }
 }
 
+function readNotifiedIds(storageKey: string): Set<string> {
+  try {
+    if (typeof localStorage === 'undefined') return new Set();
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? new Set(parsed.map(String)) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function saveNotifiedIds(storageKey: string, ids: Set<string>): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(storageKey, JSON.stringify(Array.from(ids).slice(-200)));
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
 export default function App() {
   const isDemoMode = useMemo(() => {
     if (typeof window === 'undefined') return false;
@@ -198,8 +219,10 @@ export default function App() {
   const prevActiveTripCountRef = useRef<number | null>(null);
   const knownActiveTripIdsRef = useRef<Set<string> | null>(null);
   const prevOrderStatusesRef = useRef<Record<string, string>>({});
-  const prevPaidPayoutsRef = useRef<Set<string>>(new Set());
-  const prevApprovedSettlementsRef = useRef<Set<string>>(new Set());
+  const prevPaidPayoutsRef = useRef<Set<string>>(readNotifiedIds('gb_notified_payouts_v1'));
+  const prevApprovedSettlementsRef = useRef<Set<string>>(
+    readNotifiedIds('gb_notified_settlements_v1'),
+  );
   const prevAnnouncementRef = useRef<string | undefined>(undefined);
   const prevAdminNoteRef = useRef<string | undefined>(undefined);
   const prevOvertimeRef = useRef(false);
@@ -460,6 +483,8 @@ export default function App() {
   useEffect(() => {
     if (demoActive || !currentUser) return;
     const uid = currentUser.uid;
+    let settlementsHydrated = false;
+    let payoutsHydrated = false;
 
     const unsubRider = onValue(ref(db, `deliveryPartners/${uid}`), (snap) => {
       const val = (snap.val() as RiderData | null) || {};
@@ -569,22 +594,32 @@ export default function App() {
     const unsubSettlements = onValue(ref(db, 'settlements'), (snap) => {
       const allS = (snap.val() as Record<string, SettlementRecord> | null) || {};
       const mine: Record<string, SettlementRecord> = {};
+      const newlyApproved: Array<{id: string; s: SettlementRecord}> = [];
+
       Object.entries(allS).forEach(([id, s]) => {
         if (s.riderUid === uid) {
           mine[id] = s;
           if (s.status === 'APPROVED' && !prevApprovedSettlementsRef.current.has(id)) {
-            if (prevApprovedSettlementsRef.current.size > 0) {
-              void showSystemPushNotification({
-                title: '✅ COD Deposit Approved',
-                body: `₹${Number(s.amount || 0).toFixed(2)} handover verified by Admin.`,
-                tag: `settle-${id}`,
-                tab: 'earnings',
-              });
-            }
             prevApprovedSettlementsRef.current.add(id);
+            if (settlementsHydrated) {
+              newlyApproved.push({id, s});
+            }
           }
         }
       });
+
+      saveNotifiedIds('gb_notified_settlements_v1', prevApprovedSettlementsRef.current);
+      settlementsHydrated = true;
+
+      newlyApproved.forEach(({id, s}) => {
+        void showSystemPushNotification({
+          title: '✅ COD Deposit Approved',
+          body: `₹${Number(s.amount || 0).toFixed(2)} handover verified by Admin.`,
+          tag: `settle-${id}`,
+          tab: 'earnings',
+        });
+      });
+
       setAllSettlements(allS);
       setRiderSettlements(mine);
     });
@@ -592,22 +627,32 @@ export default function App() {
     const unsubPayouts = onValue(ref(db, 'riderPayouts'), (snap) => {
       const allP = (snap.val() as Record<string, RiderPayoutRecord> | null) || {};
       const mine: Record<string, RiderPayoutRecord> = {};
+      const newlyPaid: Array<{id: string; p: RiderPayoutRecord}> = [];
+
       Object.entries(allP).forEach(([id, p]) => {
         if (p.riderUid === uid) {
           mine[id] = p;
           if (p.status === 'PAID' && !prevPaidPayoutsRef.current.has(id)) {
-            if (prevPaidPayoutsRef.current.size > 0) {
-              void showSystemPushNotification({
-                title: '💸 Earnings Payout Credited!',
-                body: `₹${Number(p.amount || 0).toFixed(2)} sent to ${p.riderUpiId || 'your UPI'}.`,
-                tag: `payout-${id}`,
-                tab: 'earnings',
-              });
-            }
             prevPaidPayoutsRef.current.add(id);
+            if (payoutsHydrated) {
+              newlyPaid.push({id, p});
+            }
           }
         }
       });
+
+      saveNotifiedIds('gb_notified_payouts_v1', prevPaidPayoutsRef.current);
+      payoutsHydrated = true;
+
+      newlyPaid.forEach(({id, p}) => {
+        void showSystemPushNotification({
+          title: '💸 Earnings Payout Credited!',
+          body: `₹${Number(p.amount || 0).toFixed(2)} sent to ${p.riderUpiId || 'your UPI'}.`,
+          tag: `payout-${id}`,
+          tab: 'earnings',
+        });
+      });
+
       setMyRiderPayouts(mine);
     });
 
