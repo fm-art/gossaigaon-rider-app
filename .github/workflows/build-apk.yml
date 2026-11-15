@@ -36,6 +36,7 @@ jobs:
         run: |
           bun install
           bun add @capacitor/core@8 @capacitor/android@8 @capacitor/cli@8 @capacitor/local-notifications@8 @capacitor/push-notifications@8 @capacitor-community/text-to-speech@8
+          bun add -d @capacitor/assets sharp
 
       - name: 6. Build Web App (Vite)
         run: bun run build
@@ -46,7 +47,59 @@ jobs:
             bunx cap add android
           fi
 
-      - name: 8. Add Firebase, Notification Icon & Phone Permissions
+      - name: 8. Prepare Custom Logo & Generate App Icon / Splash
+        run: |
+          node --input-type=module << 'EOF'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import sharp from 'sharp';
+
+          fs.mkdirSync('assets', {recursive: true});
+          const files = fs.readdirSync('assets');
+          const imageFiles = files.filter((f) => /\.(png|jpe?g|webp|svg)$/i.test(f));
+
+          const preferred =
+            imageFiles.find((f) => /^logo\.(png|svg|jpe?g|webp)$/i.test(f)) ||
+            imageFiles[0];
+
+          if (preferred) {
+            const fullPath = path.join('assets', preferred);
+            console.log('Using custom logo:', fullPath);
+            if (/\.svg$/i.test(preferred)) {
+              if (preferred !== 'logo.svg') {
+                fs.copyFileSync(fullPath, path.join('assets', 'logo.svg'));
+              }
+            } else {
+              const buf = await sharp(fullPath)
+                .resize(1024, 1024, {
+                  fit: 'contain',
+                  background: {r: 5, g: 8, b: 17, alpha: 0},
+                })
+                .png()
+                .toBuffer();
+              fs.writeFileSync(path.join('assets', 'logo.png'), buf);
+              if (preferred !== 'logo.png') {
+                fs.unlinkSync(fullPath);
+              }
+            }
+          } else if (fs.existsSync('public/icon.svg')) {
+            fs.copyFileSync('public/icon.svg', path.join('assets', 'logo.svg'));
+            console.log('Fallback to public/icon.svg');
+          } else if (fs.existsSync('public/pwa-512x512.png')) {
+            const buf = await sharp('public/pwa-512x512.png')
+              .resize(1024, 1024, {
+                fit: 'contain',
+                background: {r: 5, g: 8, b: 17, alpha: 0},
+              })
+              .png()
+              .toBuffer();
+            fs.writeFileSync(path.join('assets', 'logo.png'), buf);
+            console.log('Fallback to public/pwa-512x512.png');
+          }
+          EOF
+          bunx capacitor-assets generate --android --iconBackgroundColor '#050811' --iconBackgroundColorDark '#050811' --splashBackgroundColor '#050811' --splashBackgroundColorDark '#050811'
+
+      - name: 9. Add Firebase, Notification Icon & Phone Permissions
         run: |
           node --input-type=module << 'EOF'
           import fs from 'node:fs';
@@ -59,7 +112,6 @@ jobs:
             console.log('Firebase google-services.json copied!');
           }
 
-          // Create monochrome Delivery Bike notification icon in res/drawable
           const drawableDir = path.join('android', 'app', 'src', 'main', 'res', 'drawable');
           fs.mkdirSync(drawableDir, {recursive: true});
           const notifIconXml = `<vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -73,7 +125,6 @@ jobs:
           </vector>
           `;
           fs.writeFileSync(path.join(drawableDir, 'ic_stat_notification.xml'), notifIconXml, 'utf8');
-          console.log('Custom notification icon created!');
 
           const manifestPath = path.join('android', 'app', 'src', 'main', 'AndroidManifest.xml');
           let manifest = fs.readFileSync(manifestPath, 'utf8');
@@ -107,16 +158,16 @@ jobs:
           console.log('Manifest updated!');
           EOF
 
-      - name: 9. Sync Web Files & Plugins into Android
+      - name: 10. Sync Web Files & Plugins into Android
         run: bunx cap sync android
 
-      - name: 10. Build APK File
+      - name: 11. Build APK File
         working-directory: android
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug
 
-      - name: 11. Upload APK for Download
+      - name: 12. Upload APK for Download
         uses: actions/upload-artifact@v4
         with:
           name: gossaigaon-fleet-apk
