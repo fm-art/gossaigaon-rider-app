@@ -140,7 +140,7 @@ export async function requestPushPermissionAndToken(
   riderUid?: string,
 ): Promise<{permission: NotificationPermission | 'unsupported'; fcmToken?: string | null}> {
   if (Capacitor.isNativePlatform()) {
-    let localDisplay: string = 'denied';
+    let localDisplay = 'denied';
     try {
       const localPerm = await LocalNotifications.requestPermissions();
       localDisplay = localPerm.display;
@@ -269,6 +269,8 @@ export async function showSystemPushNotification(payload: RiderPushPayload): Pro
             title: payload.title,
             body: payload.body,
             channelId: ANDROID_CHANNEL_ID,
+            smallIcon: 'ic_stat_notification',
+            iconColor: '#16a34a',
             extra: {
               tab: payload.tab || 'active',
             },
