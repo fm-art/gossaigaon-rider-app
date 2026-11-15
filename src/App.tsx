@@ -47,7 +47,9 @@ import type {
 } from './types/rider';
 import {
   getNotificationPermissionState,
+  getNotificationPermissionStateAsync,
   playAssignmentChime,
+  registerNativeNotificationListeners,
   requestPushPermissionAndToken,
   showSystemPushNotification,
   subscribeForegroundFcm,
@@ -647,6 +649,19 @@ export default function App() {
     };
   }, [showToast]);
 
+  // Native Android notification permission sync & tap routing
+  useEffect(() => {
+    void getNotificationPermissionStateAsync().then(setPushPermission);
+    void registerNativeNotificationListeners(
+      (tab) => setActiveTab(tab),
+      (payload) => {
+        playAssignmentChime(soundEnabledRef.current);
+        showToast(`${payload.title}: ${payload.body}`, 'info');
+        void showSystemPushNotification(payload);
+      },
+    );
+  }, [showToast]);
+
   // Auto-sync FCM token if permission already granted
   useEffect(() => {
     if (!currentUser || pushPermission !== 'granted') return;
@@ -665,7 +680,7 @@ export default function App() {
         tab: 'active',
       });
     } else if (res.permission === 'denied') {
-      showToast('Push permission blocked in browser settings.', 'warning');
+      showToast('Push permission blocked in browser/app settings.', 'warning');
     } else if (res.permission === 'unsupported') {
       showToast('Push notifications not supported on this browser.', 'info');
     }
