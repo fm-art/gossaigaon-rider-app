@@ -105,9 +105,37 @@ jobs:
         working-directory: android
         run: ./gradlew assembleDebug
 
-      - name: Print Debug Keystore SHA-1 (For Firebase Console)
+      - name: Sign with Fixed Keystore (If Secret Exists) & Print SHA-1 / SHA-256
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_ALIAS: ${{ secrets.KEY_ALIAS || 'riderkey' }}
+          KS_PASS: ${{ secrets.KEYSTORE_PASSWORD || '123456' }}
+          KEY_PASS: ${{ secrets.KEY_PASSWORD || '123456' }}
         run: |
-          keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android -keypass android | grep -E "SHA1:|SHA256:" || true
+          APK_PATH="android/app/build/outputs/apk/debug/app-debug.apk"
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name "apksigner" | sort -V | tail -n 1)
+
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "=== Signing APK with Permanent Keystore Secret ==="
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > /tmp/rider.jks
+            "$APKSIGNER" sign \
+              --ks /tmp/rider.jks \
+              --ks-key-alias "$KS_ALIAS" \
+              --ks-pass "pass:$KS_PASS" \
+              --key-pass "pass:$KEY_PASS" \
+              "$APK_PATH"
+            echo "=== KEYSTORE FINGERPRINTS (FOR FIREBASE CONSOLE) ==="
+            keytool -list -v -keystore /tmp/rider.jks -alias "$KS_ALIAS" -storepass "$KS_PASS" | grep -E "SHA1:|SHA256:"
+            rm -f /tmp/rider.jks
+          else
+            echo "=== GRADLE SIGNING REPORT (EPHEMERAL DEBUG KEY) ==="
+            (cd android && ./gradlew signingReport)
+          fi
+
+          if [ -n "$APKSIGNER" ]; then
+            echo "=== FINAL APK VERIFIED CERTIFICATES ==="
+            "$APKSIGNER" verify --print-certs "$APK_PATH"
+          fi
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
