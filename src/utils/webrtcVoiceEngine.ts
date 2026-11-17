@@ -3,7 +3,7 @@ import {db} from '../config/firebase';
 import type {WebRtcIceCandidatePayload, WebRtcSdpPayload} from '../types/rider';
 
 export interface IceServerConfigInput {
-  dynamicTurnServers?: RTCIceServer[];
+  dynamicTurnServers?: RTCIceServer[] | Record<string, RTCIceServer>;
 }
 
 export type VoiceEngineState =
@@ -29,9 +29,11 @@ const DEFAULT_STUN_SERVERS: RTCIceServer[] = [
   {urls: 'stun:stun1.l.google.com:19302'},
 ];
 
+const ICE_CONNECT_TIMEOUT_MS = 18_000;
+
 /**
  * Resolves STUN + runtime TURN configuration strictly from environment variables
- * or Firebase admin settings — never hardcodes public TURN credentials.
+ * or Firebase admin settings — handles both Array and RTDB numeric-keyed Objects.
  */
 export function resolveRtcIceServers(input?: IceServerConfigInput): RTCIceServer[] {
   const servers: RTCIceServer[] = [...DEFAULT_STUN_SERVERS];
@@ -55,11 +57,16 @@ export function resolveRtcIceServers(input?: IceServerConfigInput): RTCIceServer
     }
   }
 
-  if (Array.isArray(input?.dynamicTurnServers)) {
-    for (const srv of input.dynamicTurnServers) {
-      if (srv && srv.urls) {
-        servers.push(srv);
-      }
+  const rawDynamic = input?.dynamicTurnServers;
+  const dynamicList: RTCIceServer[] = Array.isArray(rawDynamic)
+    ? rawDynamic
+    : rawDynamic && typeof rawDynamic === 'object'
+      ? Object.values(rawDynamic)
+      : [];
+
+  for (const srv of dynamicList) {
+    if (srv && srv.urls) {
+      servers.push(srv);
     }
   }
 
@@ -103,10 +110,14 @@ export class WebRtcVoiceEngine {
   private pendingCandidates: RTCIceCandidateInit[] = [];
   private processedCandidateKeys = new Set<string>();
   private remoteDescriptionSet = false;
+  private remoteCandidateReceived = false;
+  private hasTurnConfigured = false;
+  private iceConnectTimer: number | null = null;
   private closed = false;
   private connectedNotified = false;
   private activeCallId = '';
   private activeOrderId = '';
+  private callStartedAt = 0;
   private localRoleSide: 'caller' | 'receiver' = 'caller';
   private callbacks: VoiceEngineCallbacks;
 
@@ -114,15 +125,37 @@ export class WebRtcVoiceEngine {
     this.callbacks = callbacks;
   }
 
-  private attachAudioElement(stream: MediaStream): void {
-    if (typeof document === 'undefined') return;
+  private matchesActiveCall(payloadCallId?: string | null, createdAt?: number | null): boolean {
+    if (payloadCallId) {
+      return payloadCallId === this.activeCallId;
+    }
+    if (createdAt && Number.isFinite(createdAt) && this.callStartedAt > 0) {
+      return createdAt >= this.callStartedAt - 15_000;
+    }
+    return true;
+  }
+
+  private ensureAudioElement(): HTMLAudioElement | null {
+    if (typeof document === 'undefined') return null;
     if (!this.audioEl) {
       this.audioEl = document.createElement('audio');
       this.audioEl.autoplay = true;
+      this.audioEl.muted = false;
+      this.audioEl.volume = 1.0;
+      this.audioEl.style.display = 'none';
       (this.audioEl as HTMLAudioElement & {playsInline?: boolean}).playsInline = true;
+      document.body.appendChild(this.audioEl);
     }
-    this.audioEl.srcObject = stream;
-    void this.audioEl.play().catch(() => {
+    return this.audioEl;
+  }
+
+  private attachAudioElement(stream: MediaStream): void {
+    const el = this.ensureAudioElement();
+    if (!el) return;
+    el.muted = false;
+    el.volume = 1.0;
+    el.srcObject = stream;
+    void el.play().catch(() => {
       // Autoplay will complete upon answer/call click gesture
     });
   }
@@ -140,6 +173,7 @@ export class WebRtcVoiceEngine {
 
       if (this.audioEl) {
         this.audioEl.volume = 1.0;
+        this.audioEl.muted = false;
         const sinkAware = this.audioEl as HTMLAudioElement & {
           setSinkId?: (sinkId: string) => Promise<void>;
         };
@@ -175,6 +209,31 @@ export class WebRtcVoiceEngine {
     return true;
   }
 
+  private clearIceTimeout(): void {
+    if (this.iceConnectTimer !== null && typeof window !== 'undefined') {
+      window.clearTimeout(this.iceConnectTimer);
+      this.iceConnectTimer = null;
+    }
+  }
+
+  private armIceTimeout(): void {
+    if (typeof window === 'undefined' || this.iceConnectTimer !== null) return;
+    this.iceConnectTimer = window.setTimeout(() => {
+      if (this.closed || this.connectedNotified) return;
+      if (!this.remoteDescriptionSet) {
+        this.callbacks.onError('No audio response from recipient. Please try again.');
+      } else if (!this.remoteCandidateReceived) {
+        this.callbacks.onError('Network path missing from recipient. Please retry call.');
+      } else if (!this.hasTurnConfigured) {
+        this.callbacks.onError(
+          'Audio blocked by mobile network (TURN server not configured in admin/settings/webrtcIceServers).',
+        );
+      } else {
+        this.callbacks.onError('Audio connection timed out due to weak network.');
+      }
+    }, ICE_CONNECT_TIMEOUT_MS);
+  }
+
   private async flushPendingCandidates(): Promise<void> {
     if (!this.pc || !this.remoteDescriptionSet || this.closed) return;
     const queue = [...this.pendingCandidates];
@@ -190,9 +249,11 @@ export class WebRtcVoiceEngine {
 
   private async enqueueOrAddRemoteCandidate(key: string, payload: WebRtcIceCandidatePayload): Promise<void> {
     if (this.closed || !this.pc) return;
-    if (payload.callId !== this.activeCallId) return;
+    if (!payload.candidate) return;
+    if (!this.matchesActiveCall(payload.callId, payload.createdAt)) return;
     if (this.processedCandidateKeys.has(key)) return;
     this.processedCandidateKeys.add(key);
+    this.remoteCandidateReceived = true;
 
     const candidateInit: RTCIceCandidateInit = {
       candidate: payload.candidate,
@@ -218,16 +279,22 @@ export class WebRtcVoiceEngine {
     callId: string;
     side: 'caller' | 'receiver';
     localUid: string;
-    dynamicTurnServers?: RTCIceServer[];
+    dynamicTurnServers?: RTCIceServer[] | Record<string, RTCIceServer>;
   }): Promise<void> {
     this.closed = false;
     this.connectedNotified = false;
     this.remoteDescriptionSet = false;
+    this.remoteCandidateReceived = false;
     this.pendingCandidates = [];
     this.processedCandidateKeys.clear();
+    this.clearIceTimeout();
     this.activeCallId = params.callId;
     this.activeOrderId = params.orderId;
+    this.callStartedAt = Date.now();
     this.localRoleSide = params.side;
+
+    // Pre-create audio element while still near user click gesture for Android WebView
+    this.ensureAudioElement();
 
     if (
       typeof navigator === 'undefined' ||
@@ -243,7 +310,6 @@ export class WebRtcVoiceEngine {
 
     this.callbacks.onStateChange('ACQUIRING_MIC');
 
-    // Voice-only audio constraints — never request camera permission
     this.localStream = await navigator.mediaDevices.getUserMedia({
       audio: {
         echoCancellation: true,
@@ -261,6 +327,11 @@ export class WebRtcVoiceEngine {
     const iceServers = resolveRtcIceServers({
       dynamicTurnServers: params.dynamicTurnServers,
     });
+    this.hasTurnConfigured = iceServers.some((s) =>
+      String(Array.isArray(s.urls) ? s.urls.join(',') : s.urls)
+        .toLowerCase()
+        .includes('turn'),
+    );
 
     this.pc = new RTCPeerConnection({
       iceServers,
@@ -318,6 +389,7 @@ export class WebRtcVoiceEngine {
       const ice = this.pc.iceConnectionState;
 
       if (conn === 'connected' || ice === 'connected' || ice === 'completed') {
+        this.clearIceTimeout();
         this.callbacks.onStateChange('CONNECTED');
         if (!this.connectedNotified) {
           this.connectedNotified = true;
@@ -329,15 +401,19 @@ export class WebRtcVoiceEngine {
         this.callbacks.onStateChange('RECONNECTING');
         void this.attemptIceRestart(params.localUid);
       } else if (conn === 'failed' || ice === 'failed') {
+        this.clearIceTimeout();
         this.callbacks.onStateChange('FAILED');
-        this.callbacks.onError('Voice connection failed due to network conditions.');
+        this.callbacks.onError(
+          this.hasTurnConfigured
+            ? 'Voice connection failed due to network conditions.'
+            : 'Voice blocked by mobile NAT. Add TURN server in Firebase admin/settings/webrtcIceServers.',
+        );
       }
     };
 
     this.pc.onconnectionstatechange = handleConnectionChange;
     this.pc.oniceconnectionstatechange = handleConnectionChange;
 
-    // Listen for remote ICE candidates using unique Firebase push keys
     const remoteCandRef = ref(
       db,
       `inAppCalls/${params.orderId}/webrtc/${remoteCandidateSubpath}`,
@@ -373,7 +449,7 @@ export class WebRtcVoiceEngine {
     orderId: string;
     callId: string;
     riderUid: string;
-    dynamicTurnServers?: RTCIceServer[];
+    dynamicTurnServers?: RTCIceServer[] | Record<string, RTCIceServer>;
   }): Promise<void> {
     await this.initializePeerConnection({
       orderId: params.orderId,
@@ -397,11 +473,13 @@ export class WebRtcVoiceEngine {
     };
     await set(ref(db, `inAppCalls/${params.orderId}/webrtc/offer`), offerPayload);
 
-    // Watch for callee's SDP answer matching this callId
     const answerRef = ref(db, `inAppCalls/${params.orderId}/webrtc/answer`);
     const unsubAnswer = onValue(answerRef, (snap) => {
       const val = snap.val() as WebRtcSdpPayload | null;
-      if (!val || val.callId !== this.activeCallId || !val.sdp || !this.pc || this.closed) {
+      if (!val || !val.sdp || !this.pc || this.closed) {
+        return;
+      }
+      if (!this.matchesActiveCall(val.callId, val.updatedAt)) {
         return;
       }
       if (this.pc.currentRemoteDescription) return;
@@ -409,6 +487,7 @@ export class WebRtcVoiceEngine {
         try {
           if (!this.pc || this.closed) return;
           this.callbacks.onStateChange('CONNECTING');
+          this.armIceTimeout();
           await this.pc.setRemoteDescription(
             new RTCSessionDescription({type: 'answer', sdp: val.sdp}),
           );
@@ -426,7 +505,7 @@ export class WebRtcVoiceEngine {
     orderId: string;
     callId: string;
     riderUid: string;
-    dynamicTurnServers?: RTCIceServer[];
+    dynamicTurnServers?: RTCIceServer[] | Record<string, RTCIceServer>;
   }): Promise<void> {
     await this.initializePeerConnection({
       orderId: params.orderId,
@@ -438,10 +517,12 @@ export class WebRtcVoiceEngine {
     if (!this.pc || this.closed) return;
 
     this.callbacks.onStateChange('ANSWERING');
+    this.armIceTimeout();
 
     const applyOfferAndCreateAnswer = async (offerVal: WebRtcSdpPayload) => {
       if (!this.pc || this.closed || this.remoteDescriptionSet) return;
-      if (offerVal.callId !== this.activeCallId || !offerVal.sdp) return;
+      if (!offerVal.sdp) return;
+      if (!this.matchesActiveCall(offerVal.callId, offerVal.updatedAt)) return;
 
       await this.pc.setRemoteDescription(
         new RTCSessionDescription({type: 'offer', sdp: offerVal.sdp}),
@@ -465,13 +546,13 @@ export class WebRtcVoiceEngine {
     const offerRef = ref(db, `inAppCalls/${params.orderId}/webrtc/offer`);
     const existingOfferSnap = await get(offerRef);
     const existingOffer = existingOfferSnap.val() as WebRtcSdpPayload | null;
-    if (existingOffer && existingOffer.callId === this.activeCallId && existingOffer.sdp) {
+    if (existingOffer && existingOffer.sdp) {
       await applyOfferAndCreateAnswer(existingOffer);
     }
 
     const unsubOffer = onValue(offerRef, (snap) => {
       const val = snap.val() as WebRtcSdpPayload | null;
-      if (val && val.callId === this.activeCallId && val.sdp) {
+      if (val && val.sdp) {
         void applyOfferAndCreateAnswer(val).catch(() => {
           this.callbacks.onError('Could not negotiate incoming audio offer.');
         });
@@ -482,6 +563,7 @@ export class WebRtcVoiceEngine {
 
   public cleanup(): void {
     this.closed = true;
+    this.clearIceTimeout();
     this.callbacks.onStateChange('CLOSED');
 
     this.unsubs.forEach((fn) => {
@@ -519,6 +601,7 @@ export class WebRtcVoiceEngine {
       try {
         this.audioEl.pause();
         this.audioEl.srcObject = null;
+        this.audioEl.remove();
       } catch {
         // ignore
       }
@@ -541,6 +624,7 @@ export class WebRtcVoiceEngine {
     this.pendingCandidates = [];
     this.processedCandidateKeys.clear();
     this.remoteDescriptionSet = false;
+    this.remoteCandidateReceived = false;
     this.connectedNotified = false;
   }
 }
