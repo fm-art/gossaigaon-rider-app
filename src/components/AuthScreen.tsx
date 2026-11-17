@@ -6,10 +6,14 @@ import {
   type ChangeEvent,
   type FormEvent,
 } from 'react';
+import {Capacitor} from '@capacitor/core';
+import {FirebaseAuthentication} from '@capacitor-firebase/authentication';
 import {
+  GoogleAuthProvider,
   createUserWithEmailAndPassword,
   sendEmailVerification,
   sendPasswordResetEmail,
+  signInWithCredential,
   signInWithEmailAndPassword,
   signInWithPopup,
   signInWithRedirect,
@@ -344,7 +348,6 @@ export function AuthScreen({initialNotice, onDemoEnter}: AuthScreenProps) {
     try {
       const cred = await createUserWithEmailAndPassword(auth, cleanEmail, signupPassword);
       try {
-        // Check duplicate mobile number index cleanly before saving profile
         const phoneIndexRef = ref(db, `riderPhoneIndex/${normalizedPhone}`);
         const phoneSnap = await get(phoneIndexRef);
         if (phoneSnap.exists() && phoneSnap.val() !== cred.user.uid) {
@@ -380,7 +383,6 @@ export function AuthScreen({initialNotice, onDemoEnter}: AuthScreenProps) {
           `Account created! Verification email sent. ${PENDING_APPROVAL_MESSAGE}`,
         );
       } catch (innerErr) {
-        // Ensure no partial unindexed user remains on setup failure
         setAuthError(
           innerErr instanceof Error ? innerErr.message : sanitizeFirebaseAuthError(innerErr),
         );
@@ -398,12 +400,27 @@ export function AuthScreen({initialNotice, onDemoEnter}: AuthScreenProps) {
     setAuthSuccess('');
     setGoogleLoading(true);
     try {
+      if (Capacitor.isNativePlatform()) {
+        const nativeRes = await FirebaseAuthentication.signInWithGoogle();
+        const idToken = nativeRes.credential?.idToken;
+        if (!idToken) {
+          throw new Error(
+            'Google Sign-In did not return an ID token. Verify SHA-1 in Firebase Console.',
+          );
+        }
+        const credential = GoogleAuthProvider.credential(idToken);
+        const userCred = await signInWithCredential(auth, credential);
+        await provisionGoogleDeliveryProfileIfNeeded(userCred.user);
+        clearAuthThrottle();
+        return;
+      }
+
       const result = await signInWithPopup(auth, googleProvider);
       await provisionGoogleDeliveryProfileIfNeeded(result.user);
       clearAuthThrottle();
     } catch (err) {
       const code = (err as {code?: string} | null)?.code || '';
-      if (code === 'auth/popup-blocked') {
+      if (!Capacitor.isNativePlatform() && code === 'auth/popup-blocked') {
         try {
           await signInWithRedirect(auth, googleProvider);
           return;
@@ -411,7 +428,11 @@ export function AuthScreen({initialNotice, onDemoEnter}: AuthScreenProps) {
           setAuthError(sanitizeFirebaseAuthError(redirectErr));
         }
       } else {
-        setAuthError(sanitizeFirebaseAuthError(err));
+        setAuthError(
+          err instanceof Error && !code
+            ? err.message
+            : sanitizeFirebaseAuthError(err),
+        );
       }
     } finally {
       setGoogleLoading(false);
@@ -596,7 +617,6 @@ export function AuthScreen({initialNotice, onDemoEnter}: AuthScreenProps) {
 
         {mode === 'create' && (
           <form id="signup-form" onSubmit={handleCreateAccount} noValidate>
-            {/* Optional Profile Photo */}
             <div
               style={{
                 display: 'flex',
