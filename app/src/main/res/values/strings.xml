@@ -1,0 +1,24 @@
+<resources>
+    <string name="app_name">Gossaigaon Fleet</string>
+    <string name="app_tagline">Tactical Multi-Store Rider Terminal · Anti-Scam &amp; Telemetry</string>
+    <string name="tab_active">Active</string>
+    <string name="tab_map">Map</string>
+    <string name="tab_history">History</string>
+    <string name="tab_earnings">Wallet</string>
+    <string name="tab_profile">Profile</string>
+    <string name="auth_sign_in">Sign In</string>
+    <string name="auth_register_rider">Register Rider</string>
+    <string name="auth_forgot_password">Forgot Password?</string>
+    <string name="auth_reset_password">Reset Password</string>
+    <string name="auth_google_continue">Continue with Google</string>
+    <string name="duty_online">ON DUTY</string>
+    <string name="duty_offline">OFF DUTY</string>
+    <string name="battery_optimization_tips">Battery Optimization Tips</string>
+    <string name="sos_emergency">Emergency SOS</string>
+    <string name="scam_shield_Protected">Scam Shield Active</string>
+    <string name="call_rider_to_user_title">Rider to User In-App Call</string>
+    <string name="call_status_connecting">Connecting</string>
+    <string name="call_status_ringing">Ringing</string>
+    <string name="call_status_connected">Connected</string>
+    <string name="call_end_button">End Call</string>
+</resources>

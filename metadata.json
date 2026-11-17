@@ -1,0 +1,6 @@
+{
+  "name": "Gossaigaon Fleet",
+  "description": "Gossaigaon Bazar - Smart Multi-Store Rider Terminal with live GPS tracking and push notifications.",
+  "requestFramePermissions": ["geolocation", "camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

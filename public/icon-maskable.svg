@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bgMask" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#050811"/>
+    </linearGradient>
+    <linearGradient id="greenMask" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#22c55e"/>
+      <stop offset="100%" stop-color="#15803d"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#bgMask)"/>
+  <g transform="translate(66, 66) scale(0.742)">
+    <circle cx="256" cy="256" r="196" fill="rgba(22,163,74,0.16)" stroke="#16a34a" stroke-width="12"/>
+    <path d="M168 320a50 50 0 1 0 0 .1zm176 0a50 50 0 1 0 0 .1z" fill="none" stroke="#f8fafc" stroke-width="24"/>
+    <path d="M168 320l54-92h72l42 92m-114-92l-18-38h44m52 38l24-48h44" fill="none" stroke="url(#greenMask)" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="272" cy="148" r="26" fill="#38bdf8"/>
+    <path d="M356 122l-26 42h24l-14 34 38-46h-24z" fill="#f59e0b"/>
+  </g>
+</svg>
