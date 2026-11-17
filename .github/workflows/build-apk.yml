@@ -45,17 +45,23 @@ jobs:
             "server": {
               "androidScheme": "https"
             },
+            "android": {
+              "useLegacyBridge": true
+            },
             "plugins": {
               "FirebaseAuthentication": {
                 "skipNativeAuth": true,
                 "providers": ["google.com"]
+              },
+              "LocalNotifications": {
+                "iconColor": "#16a34a"
               }
             }
           }
           EOF
           npx cap add android
 
-      - name: Configure Firebase, Google Auth Gradle & Permissions
+      - name: Configure Firebase, Background GPS, Notifications & Permissions
         run: |
           if [ -f "public/assets/aistudio/google-services_1bf7436c.json" ]; then
             cp public/assets/aistudio/google-services_1bf7436c.json android/app/google-services.json
@@ -81,17 +87,24 @@ jobs:
               "android.permission.ACCESS_NETWORK_STATE",
               "android.permission.ACCESS_FINE_LOCATION",
               "android.permission.ACCESS_COARSE_LOCATION",
+              "android.permission.ACCESS_BACKGROUND_LOCATION",
+              "android.permission.FOREGROUND_SERVICE",
+              "android.permission.FOREGROUND_SERVICE_LOCATION",
+              "android.permission.WAKE_LOCK",
               "android.permission.CAMERA",
               "android.permission.RECORD_AUDIO",
               "android.permission.MODIFY_AUDIO_SETTINGS",
               "android.permission.POST_NOTIFICATIONS"
             ];
-            const tags = perms
+            const permTags = perms
               .filter(p => !xml.includes(p))
-              .map(p => `    <uses-permission android:name="${p}" />`)
-              .join("\n");
-            if (tags) {
-              xml = xml.replace("<application", `${tags}\n    <application`);
+              .map(p => `    <uses-permission android:name="${p}" />`);
+            const gpsFeature = "android.hardware.location.gps";
+            if (!xml.includes(gpsFeature)) {
+              permTags.push(`    <uses-feature android:name="${gpsFeature}" android:required="false" />`);
+            }
+            if (permTags.length > 0) {
+              xml = xml.replace("<application", `${permTags.join("\n")}\n    <application`);
               fs.writeFileSync(file, xml, "utf8");
             }
           ' "$MANIFEST"
