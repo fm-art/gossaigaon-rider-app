@@ -20,7 +20,6 @@ export const ELIGIBLE_COMMUNICATION_STATUSES = new Set([
   'READY_FOR_PICKUP',
   'PICKED_UP',
   'OUT_FOR_DELIVERY',
-  // Existing order lifecycle pre-pickup states once riderAccepted === true
   'ACCEPTED',
   'PREPARING',
   'PLACED',
@@ -300,7 +299,6 @@ export function validateIncomingCallPopup(params: {
     };
   }
 
-  // RESTAURANT caller verification
   const restaurant = resolveRestaurantIdentity(order, params.stores);
   const incomingRestUid = String(source.restaurantUid || '').trim();
   const validRestaurantCandidates = new Set(
@@ -427,6 +425,56 @@ export function buildRiderChatMessagePayload(params: {
   };
 }
 
+function normalizeChatRole(
+  rawRole: unknown,
+  senderUid: string,
+  riderUid: string,
+  channel: ChatChannel,
+): CallParticipantRole {
+  const upper = String(rawRole || '')
+    .trim()
+    .toUpperCase();
+  if (upper === 'CUSTOMER' || upper === 'USER' || upper === 'BUYER') return 'CUSTOMER';
+  if (upper === 'RESTAURANT' || upper === 'STORE' || upper === 'MERCHANT' || upper === 'VENDOR') {
+    return 'RESTAURANT';
+  }
+  if (upper === 'RIDER' || upper === 'DELIVERY' || upper === 'DRIVER') return 'RIDER';
+  if (senderUid && senderUid === riderUid) return 'RIDER';
+  return channel === 'RIDER_RESTAURANT' ? 'RESTAURANT' : 'CUSTOMER';
+}
+
+function normalizeChatChannel(rawChannel: unknown, rawRole: unknown): ChatChannel | null {
+  const upper = String(rawChannel || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]+/g, '_');
+  if (
+    upper === 'RIDER_CUSTOMER' ||
+    upper === 'CUSTOMER_RIDER' ||
+    upper === 'CUSTOMER'
+  ) {
+    return 'RIDER_CUSTOMER';
+  }
+  if (
+    upper === 'RIDER_RESTAURANT' ||
+    upper === 'RESTAURANT_RIDER' ||
+    upper === 'RESTAURANT' ||
+    upper === 'STORE'
+  ) {
+    return 'RIDER_RESTAURANT';
+  }
+  const roleUpper = String(rawRole || '')
+    .trim()
+    .toUpperCase();
+  if (roleUpper === 'RESTAURANT' || roleUpper === 'STORE' || roleUpper === 'MERCHANT') {
+    return 'RIDER_RESTAURANT';
+  }
+  if (roleUpper === 'CUSTOMER' || roleUpper === 'USER' || roleUpper === 'BUYER') {
+    return 'RIDER_CUSTOMER';
+  }
+  return null;
+}
+
 export function filterOrderChannelMessages(
   rawMessages: Record<string, Partial<TripChatMessage>> | null | undefined,
   channel: ChatChannel,
@@ -438,31 +486,53 @@ export function filterOrderChannelMessages(
     channel === 'RIDER_CUSTOMER' ? 'CUSTOMER' : 'RESTAURANT';
 
   return Object.entries(rawMessages)
-    .map(([id, msg]) => ({
-      messageId: String(msg.messageId || id),
-      senderUid: String(msg.senderUid || ''),
-      senderRole: (msg.senderRole || 'RIDER') as CallParticipantRole,
-      receiverUid: String(msg.receiverUid || ''),
-      channel: msg.channel as ChatChannel,
-      messageType: 'TEXT' as const,
-      message: sanitizeText(msg.message || ''),
-      timestamp: Number(msg.timestamp || 0),
-      status: (msg.status || 'SENT') as TripChatMessage['status'],
-      deliveredAt: msg.deliveredAt ? Number(msg.deliveredAt) : undefined,
-      readAt: msg.readAt ? Number(msg.readAt) : undefined,
-      clientMsgId: msg.clientMsgId,
-    }))
+    .map(([id, msg]) => {
+      const extra = msg as Record<string, unknown>;
+      const senderUid = String(msg.senderUid || '').trim();
+      const receiverUid = String(msg.receiverUid || '').trim();
+      const resolvedChannel =
+        normalizeChatChannel(msg.channel, msg.senderRole) ||
+        (senderUid && senderUid !== riderUid ? 'RIDER_CUSTOMER' : channel);
+      const resolvedRole = normalizeChatRole(
+        msg.senderRole,
+        senderUid,
+        riderUid,
+        resolvedChannel,
+      );
+      const textVal = sanitizeText(
+        msg.message ?? extra.text ?? extra.body ?? '',
+      ).trim();
+
+      return {
+        messageId: String(msg.messageId || id),
+        senderUid,
+        senderRole: resolvedRole,
+        receiverUid,
+        channel: resolvedChannel,
+        messageType: 'TEXT' as const,
+        message: textVal,
+        timestamp: Number(msg.timestamp || extra.createdAt || 0),
+        status: (String(msg.status || 'SENT').toUpperCase() as TripChatMessage['status']),
+        deliveredAt: msg.deliveredAt ? Number(msg.deliveredAt) : undefined,
+        readAt: msg.readAt ? Number(msg.readAt) : undefined,
+        clientMsgId: msg.clientMsgId,
+      };
+    })
     .filter((m) => {
       if (m.channel !== channel) return false;
       if (!m.message) return false;
-      const isValidParticipantPair =
-        (m.senderUid === riderUid &&
-          m.senderRole === 'RIDER' &&
-          (!peerUid || m.receiverUid === peerUid)) ||
-        (m.receiverUid === riderUid &&
-          m.senderRole === expectedPeerRole &&
-          (!peerUid || m.senderUid === peerUid));
-      return isValidParticipantPair;
+
+      const isOutgoingFromRider =
+        m.senderUid === riderUid &&
+        m.senderRole === 'RIDER' &&
+        (!peerUid || channel === 'RIDER_RESTAURANT' || !m.receiverUid || m.receiverUid === peerUid);
+
+      const isIncomingToRider =
+        (m.receiverUid === riderUid || (!m.receiverUid && Boolean(m.senderUid) && m.senderUid !== riderUid)) &&
+        m.senderRole === expectedPeerRole &&
+        (!peerUid || channel === 'RIDER_RESTAURANT' || m.senderUid === peerUid);
+
+      return isOutgoingFromRider || isIncomingToRider;
     })
     .sort((a, b) => a.timestamp - b.timestamp);
 }
@@ -475,7 +545,7 @@ export function countUnreadChannelMessages(
 ): number {
   const list = filterOrderChannelMessages(rawMessages, channel, riderUid, peerUid);
   return list.filter(
-    (m) => m.senderUid !== riderUid && m.receiverUid === riderUid && m.status !== 'READ',
+    (m) => m.senderUid !== riderUid && (!m.receiverUid || m.receiverUid === riderUid) && m.status !== 'READ',
   ).length;
 }
 
