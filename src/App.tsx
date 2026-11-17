@@ -1,4 +1,6 @@
 import {Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {Capacitor} from '@capacitor/core';
+import {FirebaseAuthentication} from '@capacitor-firebase/authentication';
 import {
   getRedirectResult,
   onAuthStateChanged,
@@ -513,16 +515,18 @@ export default function App() {
     if (demoActive) return;
     let active = true;
 
-    void getRedirectResult(auth)
-      .then(async (res) => {
-        if (!active || !res?.user) return;
-        await provisionGoogleDeliveryProfileIfNeeded(res.user);
-        clearAuthThrottle();
-      })
-      .catch((err) => {
-        if (!active) return;
-        setAuthNotice({type: 'error', text: sanitizeFirebaseAuthError(err)});
-      });
+    if (!Capacitor.isNativePlatform()) {
+      void getRedirectResult(auth)
+        .then(async (res) => {
+          if (!active || !res?.user) return;
+          await provisionGoogleDeliveryProfileIfNeeded(res.user);
+          clearAuthThrottle();
+        })
+        .catch((err) => {
+          if (!active) return;
+          setAuthNotice({type: 'error', text: sanitizeFirebaseAuthError(err)});
+        });
+    }
 
     const unsub = onAuthStateChanged(auth, (user) => {
       setCurrentUser(user);
@@ -543,7 +547,6 @@ export default function App() {
       setAuthNotice(null);
       setProfileLoaded(false);
 
-      // Verify account is still active and not disabled/revoked in Firebase Auth
       void user.reload().catch((err) => {
         const code = (err as {code?: string} | null)?.code || '';
         if (
@@ -692,7 +695,6 @@ export default function App() {
         });
       }
 
-      // Check READY_FOR_PICKUP transitions
       Object.entries(myOrders).forEach(([id, o]) => {
         const prevStatus = prevOrderStatusesRef.current[id];
         if (prevStatus && prevStatus !== 'READY_FOR_PICKUP' && o.status === 'READY_FOR_PICKUP') {
@@ -1052,7 +1054,7 @@ export default function App() {
       }
     }, 15000);
     return () => clearInterval(interval);
-  }, [currentUser, riderData?.online, riderData?.suspended, autoGpsEnabled, assignedOrders]);
+  }, [isDashboardUnlocked, currentUser, riderData?.online, riderData?.suspended, autoGpsEnabled, assignedOrders]);
 
   // Pass Trip to nearest eligible rider
   const passTripToNextRider = useCallback(
@@ -1261,7 +1263,7 @@ export default function App() {
     };
     window.addEventListener('popstate', handlePop);
     return () => window.removeEventListener('popstate', handlePop);
-  }, [switchNav, showToast]);
+  }, [switchNav, showToast, comm]);
 
   // Rider actions
   const handleToggleSound = () => {
@@ -1900,6 +1902,9 @@ export default function App() {
         () => undefined,
       );
     }
+    if (Capacitor.isNativePlatform()) {
+      void FirebaseAuthentication.signOut().catch(() => undefined);
+    }
     void signOut(auth);
   };
 
@@ -2415,7 +2420,7 @@ export default function App() {
           const trip = activeTrips.find((t) => t.tripId === tripId);
           if (isTripPickedUp(trip)) {
             setCancelModalTripId(null);
-            showToast('🔒 Store se pickup ke baad order cancel/pass nahi ho sakta!', 'danger');
+            showToast('🔒 Store se pickup ke baad order cancel/pass nahi kar sakte!', 'danger');
             return;
           }
           setCancelModalTripId(null);
