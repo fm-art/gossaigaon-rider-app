@@ -40,7 +40,7 @@ jobs:
           cat << 'EOF' > capacitor.config.json
           {
             "appId": "com.gossaigaon.rider",
-            "appName": "Gossaigaon Fleet",
+            "appName": "Chutki Rider",
             "webDir": "dist",
             "server": {
               "androidScheme": "https"
@@ -110,8 +110,20 @@ jobs:
           fi
           rm -rf assets
 
-      - name: Configure Firebase, Background GPS, Notification Icon & Permissions
+      - name: Configure App Name, Firebase, Background GPS, Notification Icon & Permissions
         run: |
+          STRINGS_FILE="android/app/src/main/res/values/strings.xml"
+          if [ -f "$STRINGS_FILE" ]; then
+            node -e '
+              const fs = require("fs");
+              const file = process.argv[1];
+              let xml = fs.readFileSync(file, "utf8");
+              xml = xml.replace(/<string name="app_name">[^<]*<\/string>/, "<string name=\"app_name\">Chutki Rider</string>");
+              xml = xml.replace(/<string name="title_activity_main">[^<]*<\/string>/, "<string name=\"title_activity_main\">Chutki Rider</string>");
+              fs.writeFileSync(file, xml, "utf8");
+            ' "$STRINGS_FILE"
+          fi
+
           if [ -f "public/assets/aistudio/google-services_1bf7436c.json" ]; then
             cp public/assets/aistudio/google-services_1bf7436c.json android/app/google-services.json
           fi
@@ -235,6 +247,6 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gossaigaon-fleet-debug-apk
+          name: chutki-rider-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
