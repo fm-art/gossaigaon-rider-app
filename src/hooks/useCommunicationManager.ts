@@ -831,8 +831,15 @@ export function useCommunicationManager({
           }
 
           if (msg.receiverUid === riderUid && msg.senderUid !== riderUid) {
+            const extra = msg as Record<string, unknown>;
+            const msgBody = String(
+              msg.message ?? extra.text ?? extra.body ?? 'Tap to reply',
+            ).slice(0, 120);
+
             const isCurrentlyOpen =
-              openChatTarget?.orderId === orderId && openChatTarget?.initialChannel === msg.channel;
+              openChatTarget?.orderId === orderId &&
+              (!msg.channel || openChatTarget?.initialChannel === msg.channel);
+
             if (isCurrentlyOpen && msg.status !== 'READ') {
               void update(ref(db, `tripChats/${orderId}/messages/${msgId}`), {
                 status: 'READ',
@@ -854,10 +861,14 @@ export function useCommunicationManager({
               !notifiedChatMsgIdsRef.current.has(dedupeKey)
             ) {
               notifiedChatMsgIdsRef.current.add(dedupeKey);
-              const senderLabel = msg.senderRole === 'RESTAURANT' ? 'Restaurant' : 'Customer';
+              const senderRoleUpper = String(msg.senderRole || '').toUpperCase();
+              const senderLabel =
+                senderRoleUpper === 'RESTAURANT' || msg.channel === 'RIDER_RESTAURANT'
+                  ? 'Restaurant'
+                  : 'Customer';
               void showSystemPushNotification({
                 title: `💬 New ${senderLabel} Message · #${orderId.slice(-6)}`,
-                body: String(msg.message || 'Tap to reply').slice(0, 120),
+                body: msgBody,
                 tag: `chat-${orderId}-${msgId}`,
                 tab: 'active',
               });
@@ -916,28 +927,54 @@ export function useCommunicationManager({
     prevUnreadTotalRef.current = unreadByOrder.grandTotal;
   }, [openChatTarget, unreadByOrder.grandTotal]);
 
+  const getSiblingOrderIdsForCustomerChat = useCallback(
+    (orderId: string): string[] => {
+      const targetOrder = assignedOrders[orderId];
+      if (!targetOrder) return [orderId];
+      const batchId = String(targetOrder.batchGroupId || '').trim();
+      const custUid = String(targetOrder.customerUid || '').trim();
+      if (!batchId) return [orderId];
+
+      const siblingIds = activeOrderIds.filter((id) => {
+        const o = assignedOrders[id];
+        if (!o) return false;
+        if (String(o.batchGroupId || '').trim() !== batchId) return false;
+        if (custUid && o.customerUid && String(o.customerUid).trim() !== custUid) return false;
+        return true;
+      });
+      return siblingIds.length > 0 ? siblingIds : [orderId];
+    },
+    [activeOrderIds, assignedOrders],
+  );
+
   const markChannelAsRead = useCallback(
     (orderId: string, channel: ChatChannel) => {
       if (demoActive || !riderUid) return;
-      const msgs = rawChatsByOrder[orderId];
-      if (!msgs) return;
+      const orderIdsToClear =
+        channel === 'RIDER_CUSTOMER' ? getSiblingOrderIdsForCustomerChat(orderId) : [orderId];
       const now = Date.now();
-      Object.entries(msgs).forEach(([msgId, msg]) => {
-        if (
-          msg.channel === channel &&
-          msg.receiverUid === riderUid &&
-          msg.senderUid !== riderUid &&
-          msg.status !== 'READ'
-        ) {
-          void update(ref(db, `tripChats/${orderId}/messages/${msgId}`), {
-            status: 'READ',
-            deliveredAt: msg.deliveredAt || now,
-            readAt: now,
-          }).catch(() => undefined);
-        }
+
+      orderIdsToClear.forEach((targetId) => {
+        const msgs = rawChatsByOrder[targetId];
+        if (!msgs) return;
+        Object.entries(msgs).forEach(([msgId, msg]) => {
+          const msgChannel = msg.channel || channel;
+          if (
+            msgChannel === channel &&
+            msg.receiverUid === riderUid &&
+            msg.senderUid !== riderUid &&
+            msg.status !== 'READ'
+          ) {
+            void update(ref(db, `tripChats/${targetId}/messages/${msgId}`), {
+              status: 'READ',
+              deliveredAt: msg.deliveredAt || now,
+              readAt: now,
+            }).catch(() => undefined);
+          }
+        });
       });
     },
-    [demoActive, rawChatsByOrder, riderUid],
+    [demoActive, getSiblingOrderIdsForCustomerChat, rawChatsByOrder, riderUid],
   );
 
   const openOrderChat = useCallback(
@@ -1031,21 +1068,44 @@ export function useCommunicationManager({
   const getMessagesForOrderChannel = useCallback(
     (orderId: string, channel: ChatChannel): TripChatMessage[] => {
       if (!riderUid) return [];
-      const order = assignedOrders[orderId];
-      const peerUid =
-        channel === 'RIDER_CUSTOMER'
-          ? resolveCustomerIdentity(order).uid
-          : resolveRestaurantIdentity(order, stores).uid;
-      const synced = filterOrderChannelMessages(
-        rawChatsByOrder[orderId],
-        channel,
-        riderUid,
-        demoActive ? '' : peerUid,
-      );
-      const failed = (failedMessagesByOrder[orderId] || []).filter((m) => m.channel === channel);
-      return [...synced, ...failed].sort((a, b) => a.timestamp - b.timestamp);
+      const orderIdsToMerge =
+        channel === 'RIDER_CUSTOMER' ? getSiblingOrderIdsForCustomerChat(orderId) : [orderId];
+
+      const mergedById = new Map<string, TripChatMessage>();
+      orderIdsToMerge.forEach((targetId) => {
+        const order = assignedOrders[targetId];
+        const peerUid =
+          channel === 'RIDER_CUSTOMER'
+            ? resolveCustomerIdentity(order).uid
+            : resolveRestaurantIdentity(order, stores).uid;
+        const synced = filterOrderChannelMessages(
+          rawChatsByOrder[targetId],
+          channel,
+          riderUid,
+          demoActive ? '' : peerUid,
+        );
+        synced.forEach((m) => {
+          mergedById.set(`${targetId}:${m.messageId}`, m);
+        });
+        const failed = (failedMessagesByOrder[targetId] || []).filter(
+          (m) => m.channel === channel,
+        );
+        failed.forEach((m) => {
+          mergedById.set(`failed:${targetId}:${m.messageId}`, m);
+        });
+      });
+
+      return Array.from(mergedById.values()).sort((a, b) => a.timestamp - b.timestamp);
     },
-    [assignedOrders, demoActive, failedMessagesByOrder, rawChatsByOrder, riderUid, stores],
+    [
+      assignedOrders,
+      demoActive,
+      failedMessagesByOrder,
+      getSiblingOrderIdsForCustomerChat,
+      rawChatsByOrder,
+      riderUid,
+      stores,
+    ],
   );
 
   useEffect(() => {
