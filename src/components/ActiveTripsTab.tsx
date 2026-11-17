@@ -406,7 +406,12 @@ export const ActiveTripsTab = memo(function ActiveTripsTab({
               trip.address || 'Gossaigaon',
             );
             const isOutForDelivery = trip.orders.some((o) => o.status === 'OUT_FOR_DELIVERY');
-            const primaryOrder = trip.orders[0];
+            const primaryOrder =
+              trip.orders.find((o) => (unreadByOrder[o.orderId]?.customer || 0) > 0) ||
+              trip.orders.find((o) =>
+                canCommunicateWithCustomer({riderUid, isRiderApproved, order: o}),
+              ) ||
+              trip.orders[0];
             const primaryCustomer = primaryOrder ? resolveCustomerIdentity(primaryOrder) : null;
             const primaryRestaurant = primaryOrder
               ? resolveRestaurantIdentity(primaryOrder, stores)
@@ -419,9 +424,10 @@ export const ActiveTripsTab = memo(function ActiveTripsTab({
                   order: primaryOrder,
                 }),
             );
-            const primaryCustomerUnread = primaryOrder
-              ? unreadByOrder[primaryOrder.orderId]?.customer || 0
-              : 0;
+            const primaryCustomerUnread = trip.orders.reduce(
+              (sum, o) => sum + (unreadByOrder[o.orderId]?.customer || 0),
+              0,
+            );
             const primaryCallStatus = primaryOrder
               ? callStatusByOrder[primaryOrder.orderId] || ''
               : '';
