@@ -1,0 +1,150 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "admins": {
+      ".read": false,
+      ".write": false,
+      "$uid": {
+        ".read": "auth != null && auth.uid == $uid",
+        ".write": false
+      }
+    },
+    "adminUsers": {
+      ".read": false,
+      ".write": false,
+      "$uid": {
+        ".read": "auth != null && auth.uid == $uid",
+        ".write": false
+      }
+    },
+    "deliveryUsers": {
+      ".read": "auth != null && (root.child('admins').child(auth.uid).val() === true || root.child('adminUsers').child(auth.uid).child('active').val() === true)",
+      "$uid": {
+        ".read": "auth != null && (auth.uid == $uid || root.child('admins').child(auth.uid).val() === true || root.child('adminUsers').child(auth.uid).child('active').val() === true)",
+        ".write": "auth != null && (root.child('admins').child(auth.uid).val() === true || root.child('adminUsers').child(auth.uid).child('active').val() === true || (auth.uid == $uid && !newData.hasChild('isAdmin') && !newData.hasChild('role') && !newData.hasChild('approved') && !newData.hasChild('suspended') && ((!data.exists() && newData.child('uid').val() == auth.uid && newData.child('approvalStatus').val() == 'pending' && newData.child('accountStatus').val() == 'active' && !newData.hasChild('rejectionReason')) || (data.exists() && newData.child('uid').val() == data.child('uid').val() && newData.child('approvalStatus').val() == data.child('approvalStatus').val() && newData.child('accountStatus').val() == data.child('accountStatus').val() && (!newData.hasChild('rejectionReason') || newData.child('rejectionReason').val() == data.child('rejectionReason').val())))))"
+      }
+    },
+    "riderPhoneIndex": {
+      ".read": false,
+      ".write": false,
+      "$phone": {
+        ".read": "auth != null",
+        ".write": "auth != null && !data.exists() && newData.val() == auth.uid && newData.isString()"
+      }
+    },
+    "deliveryPartners": {
+      ".read": "auth != null && (root.child('admins').child(auth.uid).val() === true || root.child('adminUsers').child(auth.uid).child('active').val() === true || ((root.child('deliveryPartners').child(auth.uid).child('approved').val() === true || root.child('deliveryUsers').child(auth.uid).child('approvalStatus').val() === 'approved') && root.child('deliveryPartners').child(auth.uid).child('suspended').val() !== true && root.child('deliveryUsers').child(auth.uid).child('accountStatus').val() !== 'suspended'))",
+      "$uid": {
+        ".read": "auth != null && (auth.uid == $uid || root.child('admins').child(auth.uid).val() === true || root.child('adminUsers').child(auth.uid).child('active').val() === true)",
+        ".write": "auth != null && (root.child('admins').child(auth.uid).val() === true || root.child('adminUsers').child(auth.uid).child('active').val() === true || (auth.uid == $uid && ((!data.exists() && newData.child('approved').val() === false && (!newData.hasChild('approvalStatus') || newData.child('approvalStatus').val() == 'pending') && (!newData.hasChild('accountStatus') || newData.child('accountStatus').val() == 'active') && (!newData.hasChild('suspended') || newData.child('suspended').val() === false) && (!newData.hasChild('online') || newData.child('online').val() === false)) || (data.exists() && newData.child('approved').val() == data.child('approved').val() && (!newData.hasChild('approvalStatus') || newData.child('approvalStatus').val() == data.child('approvalStatus').val()) && (!newData.hasChild('accountStatus') || newData.child('accountStatus').val() == data.child('accountStatus').val()) && (!newData.hasChild('suspended') || newData.child('suspended').val() == data.child('suspended').val()) && (!newData.hasChild('adminNote') || newData.child('adminNote').val() == data.child('adminNote').val()) && (!newData.hasChild('ratingAvg') || newData.child('ratingAvg').val() == data.child('ratingAvg').val()) && (!newData.hasChild('ratingCount') || newData.child('ratingCount').val() == data.child('ratingCount').val()) && (!newData.hasChild('online') || newData.child('online').val() === false || ((data.child('approved').val() === true || root.child('deliveryUsers').child(auth.uid).child('approvalStatus').val() === 'approved') && data.child('suspended').val() !== true && root.child('deliveryUsers').child(auth.uid).child('accountStatus').val() !== 'suspended'))))))"
+      }
+    },
+    "restaurants": {
+      ".read": "auth != null && ((root.child('deliveryPartners').child(auth.uid).child('approved').val() === true || root.child('deliveryUsers').child(auth.uid).child('approvalStatus').val() === 'approved') && root.child('deliveryPartners').child(auth.uid).child('suspended').val() !== true && root.child('deliveryUsers').child(auth.uid).child('accountStatus').val() !== 'suspended')",
+      ".write": false
+    },
+    "admin": {
+      ".read": "auth != null",
+      ".write": "auth != null && (root.child('admins').child(auth.uid).val() === true || root.child('adminUsers').child(auth.uid).child('active').val() === true)"
+    },
+    "riderRatings": {
+      "$uid": {
+        ".read": "auth != null && auth.uid == $uid",
+        ".write": false
+      }
+    },
+    "orders": {
+      ".read": "auth != null && (root.child('admins').child(auth.uid).val() === true || ((root.child('deliveryPartners').child(auth.uid).child('approved').val() === true || root.child('deliveryUsers').child(auth.uid).child('approvalStatus').val() === 'approved') && root.child('deliveryPartners').child(auth.uid).child('suspended').val() !== true && root.child('deliveryUsers').child(auth.uid).child('accountStatus').val() !== 'suspended'))",
+      "$orderId": {
+        ".write": "auth != null && ((root.child('deliveryPartners').child(auth.uid).child('approved').val() === true || root.child('deliveryUsers').child(auth.uid).child('approvalStatus').val() === 'approved') && root.child('deliveryPartners').child(auth.uid).child('suspended').val() !== true && root.child('deliveryUsers').child(auth.uid).child('accountStatus').val() !== 'suspended') && data.child('deliveryUid').val() == auth.uid && newData.child('totalAmount').val() == data.child('totalAmount').val() && newData.child('deliveryCharge').val() == data.child('deliveryCharge').val() && newData.child('deliveryOtp').val() == data.child('deliveryOtp').val() && newData.child('pickupOtp').val() == data.child('pickupOtp').val() && newData.child('customerUid').val() == data.child('customerUid').val() && newData.child('paymentStatus').val() == data.child('paymentStatus').val() && ((data.child('status').val() != 'PICKED_UP' && data.child('status').val() != 'OUT_FOR_DELIVERY' && data.child('status').val() != 'DELIVERED') || newData.child('deliveryUid').val() == auth.uid)"
+      }
+    },
+    "settlements": {
+      ".read": "auth != null && (root.child('admins').child(auth.uid).val() === true || ((root.child('deliveryPartners').child(auth.uid).child('approved').val() === true || root.child('deliveryUsers').child(auth.uid).child('approvalStatus').val() === 'approved') && root.child('deliveryPartners').child(auth.uid).child('suspended').val() !== true && root.child('deliveryUsers').child(auth.uid).child('accountStatus').val() !== 'suspended'))",
+      "$settlementId": {
+        ".write": "auth != null && !data.exists() && ((root.child('deliveryPartners').child(auth.uid).child('approved').val() === true || root.child('deliveryUsers').child(auth.uid).child('approvalStatus').val() === 'approved') && root.child('deliveryPartners').child(auth.uid).child('suspended').val() !== true && root.child('deliveryUsers').child(auth.uid).child('accountStatus').val() !== 'suspended') && newData.child('riderUid').val() == auth.uid && newData.child('status').val() == 'PENDING' && newData.child('amount').isNumber() && newData.child('amount').val() > 0 && newData.child('amount').val() <= 25000"
+      }
+    },
+    "riderPayouts": {
+      ".read": "auth != null && (root.child('admins').child(auth.uid).val() === true || ((root.child('deliveryPartners').child(auth.uid).child('approved').val() === true || root.child('deliveryUsers').child(auth.uid).child('approvalStatus').val() === 'approved') && root.child('deliveryPartners').child(auth.uid).child('suspended').val() !== true && root.child('deliveryUsers').child(auth.uid).child('accountStatus').val() !== 'suspended'))",
+      "$payoutId": {
+        ".write": "auth != null && !data.exists() && ((root.child('deliveryPartners').child(auth.uid).child('approved').val() === true || root.child('deliveryUsers').child(auth.uid).child('approvalStatus').val() === 'approved') && root.child('deliveryPartners').child(auth.uid).child('suspended').val() !== true && root.child('deliveryUsers').child(auth.uid).child('accountStatus').val() !== 'suspended') && newData.child('riderUid').val() == auth.uid && newData.child('status').val() == 'PENDING' && newData.child('amount').isNumber() && newData.child('amount').val() > 0 && newData.child('amount').val() <= 10000"
+      }
+    },
+    "feedbacks": {
+      ".read": "auth != null && (root.child('admins').child(auth.uid).val() === true || ((root.child('deliveryPartners').child(auth.uid).child('approved').val() === true || root.child('deliveryUsers').child(auth.uid).child('approvalStatus').val() === 'approved') && root.child('deliveryPartners').child(auth.uid).child('suspended').val() !== true && root.child('deliveryUsers').child(auth.uid).child('accountStatus').val() !== 'suspended'))",
+      "$feedbackId": {
+        ".write": "auth != null && !data.exists() && ((root.child('deliveryPartners').child(auth.uid).child('approved').val() === true || root.child('deliveryUsers').child(auth.uid).child('approvalStatus').val() === 'approved') && root.child('deliveryPartners').child(auth.uid).child('suspended').val() !== true && root.child('deliveryUsers').child(auth.uid).child('accountStatus').val() !== 'suspended') && newData.child('uid').val() == auth.uid && newData.child('status').val() == 'OPEN'"
+      }
+    },
+    "inAppCalls": {
+      ".read": false,
+      ".write": false,
+      "$orderId": {
+        ".read": "auth != null && (root.child('admins').child(auth.uid).val() === true || root.child('adminUsers').child(auth.uid).child('active').val() === true || (root.child('orders').child($orderId).child('deliveryUid').val() == auth.uid && (root.child('deliveryPartners').child(auth.uid).child('approved').val() === true || root.child('deliveryUsers').child(auth.uid).child('approvalStatus').val() === 'approved') && root.child('deliveryPartners').child(auth.uid).child('suspended').val() !== true && root.child('deliveryUsers').child(auth.uid).child('accountStatus').val() !== 'suspended') || root.child('orders').child($orderId).child('customerUid').val() == auth.uid || root.child('orders').child($orderId).child('restaurantUid').val() == auth.uid || root.child('orders').child($orderId).child('restaurantId').val() == auth.uid || root.child('restaurants').child(root.child('orders').child($orderId).child('restaurantId').val()).child('ownerUid').val() == auth.uid || root.child('restaurants').child(root.child('orders').child($orderId).child('restaurantId').val()).child('restaurantUid').val() == auth.uid || root.child('restaurants').child(root.child('orders').child($orderId).child('restaurantId').val()).child('uid').val() == auth.uid)",
+        ".write": "auth != null && root.child('orders').child($orderId).exists() && root.child('orders').child($orderId).child('status').val() != 'DELIVERED' && root.child('orders').child($orderId).child('status').val() != 'CANCELLED' && ((root.child('orders').child($orderId).child('deliveryUid').val() == auth.uid && (root.child('deliveryPartners').child(auth.uid).child('approved').val() === true || root.child('deliveryUsers').child(auth.uid).child('approvalStatus').val() === 'approved') && root.child('deliveryPartners').child(auth.uid).child('suspended').val() !== true && root.child('deliveryUsers').child(auth.uid).child('accountStatus').val() !== 'suspended') || root.child('orders').child($orderId).child('customerUid').val() == auth.uid || root.child('orders').child($orderId).child('restaurantUid').val() == auth.uid || root.child('orders').child($orderId).child('restaurantId').val() == auth.uid || root.child('restaurants').child(root.child('orders').child($orderId).child('restaurantId').val()).child('ownerUid').val() == auth.uid || root.child('restaurants').child(root.child('orders').child($orderId).child('restaurantId').val()).child('restaurantUid').val() == auth.uid || root.child('restaurants').child(root.child('orders').child($orderId).child('restaurantId').val()).child('uid').val() == auth.uid)",
+        ".validate": "newData.child('orderId').val() == $orderId && newData.child('callId').isString() && (newData.child('callerRole').val() == 'RIDER' || newData.child('callerRole').val() == 'CUSTOMER' || newData.child('callerRole').val() == 'RESTAURANT') && (newData.child('status').val() == 'RINGING' || newData.child('status').val() == 'CONNECTING' || newData.child('status').val() == 'CONNECTED' || newData.child('status').val() == 'ENDED' || newData.child('status').val() == 'DECLINED' || newData.child('status').val() == 'BUSY' || newData.child('status').val() == 'MISSED' || newData.child('status').val() == 'FAILED')",
+        "webrtc": {
+          "offer": {
+            ".validate": "!newData.exists() || (newData.child('type').val() == 'offer' && newData.child('sdp').isString())"
+          },
+          "answer": {
+            ".validate": "!newData.exists() || (newData.child('type').val() == 'answer' && newData.child('sdp').isString())"
+          },
+          "callerCandidates": {
+            "$candidateId": {
+              ".validate": "newData.child('candidate').isString()"
+            }
+          },
+          "receiverCandidates": {
+            "$candidateId": {
+              ".validate": "newData.child('candidate').isString()"
+            }
+          }
+        }
+      }
+    },
+    "riderCallInbox": {
+      ".read": false,
+      ".write": false,
+      "$riderUid": {
+        ".read": "auth != null && (auth.uid == $riderUid || root.child('admins').child(auth.uid).val() === true)",
+        ".write": "auth != null && (auth.uid == $riderUid || (newData.hasChild('orderId') && root.child('orders').child(newData.child('orderId').val()).child('deliveryUid').val() == $riderUid && root.child('orders').child(newData.child('orderId').val()).child('status').val() != 'DELIVERED' && root.child('orders').child(newData.child('orderId').val()).child('status').val() != 'CANCELLED' && (root.child('orders').child(newData.child('orderId').val()).child('customerUid').val() == auth.uid || root.child('orders').child(newData.child('orderId').val()).child('restaurantUid').val() == auth.uid || root.child('orders').child(newData.child('orderId').val()).child('restaurantId').val() == auth.uid || root.child('restaurants').child(root.child('orders').child(newData.child('orderId').val()).child('restaurantId').val()).child('ownerUid').val() == auth.uid || root.child('restaurants').child(root.child('orders').child(newData.child('orderId').val()).child('restaurantId').val()).child('restaurantUid').val() == auth.uid || root.child('restaurants').child(root.child('orders').child(newData.child('orderId').val()).child('restaurantId').val()).child('uid').val() == auth.uid)))",
+        ".validate": "!newData.exists() || (newData.child('callId').isString() && newData.child('orderId').isString() && newData.child('riderUid').val() == $riderUid)"
+      }
+    },
+    "customerCallInbox": {
+      ".read": false,
+      ".write": false,
+      "$customerUid": {
+        ".read": "auth != null && (auth.uid == $customerUid || root.child('admins').child(auth.uid).val() === true)",
+        ".write": "auth != null && (auth.uid == $customerUid || (newData.hasChild('orderId') && root.child('orders').child(newData.child('orderId').val()).child('customerUid').val() == $customerUid && root.child('orders').child(newData.child('orderId').val()).child('deliveryUid').val() == auth.uid && (root.child('deliveryPartners').child(auth.uid).child('approved').val() === true || root.child('deliveryUsers').child(auth.uid).child('approvalStatus').val() === 'approved') && root.child('deliveryPartners').child(auth.uid).child('suspended').val() !== true && root.child('deliveryUsers').child(auth.uid).child('accountStatus').val() !== 'suspended' && root.child('orders').child(newData.child('orderId').val()).child('status').val() != 'DELIVERED' && root.child('orders').child(newData.child('orderId').val()).child('status').val() != 'CANCELLED'))",
+        ".validate": "!newData.exists() || (newData.child('callId').isString() && newData.child('orderId').isString() && newData.child('customerUid').val() == $customerUid)"
+      }
+    },
+    "restaurantCallInbox": {
+      ".read": false,
+      ".write": false,
+      "$restaurantUid": {
+        ".read": "auth != null && (auth.uid == $restaurantUid || root.child('restaurants').child($restaurantUid).child('ownerUid').val() == auth.uid || root.child('admins').child(auth.uid).val() === true)",
+        ".write": "auth != null && (auth.uid == $restaurantUid || root.child('restaurants').child($restaurantUid).child('ownerUid').val() == auth.uid || (newData.hasChild('orderId') && root.child('orders').child(newData.child('orderId').val()).child('deliveryUid').val() == auth.uid && (root.child('deliveryPartners').child(auth.uid).child('approved').val() === true || root.child('deliveryUsers').child(auth.uid).child('approvalStatus').val() === 'approved') && root.child('deliveryPartners').child(auth.uid).child('suspended').val() !== true && root.child('deliveryUsers').child(auth.uid).child('accountStatus').val() !== 'suspended' && root.child('orders').child(newData.child('orderId').val()).child('status').val() != 'DELIVERED' && root.child('orders').child(newData.child('orderId').val()).child('status').val() != 'CANCELLED' && (root.child('orders').child(newData.child('orderId').val()).child('restaurantUid').val() == $restaurantUid || root.child('orders').child(newData.child('orderId').val()).child('restaurantId').val() == $restaurantUid || root.child('restaurants').child(root.child('orders').child(newData.child('orderId').val()).child('restaurantId').val()).child('ownerUid').val() == $restaurantUid || root.child('restaurants').child(root.child('orders').child(newData.child('orderId').val()).child('restaurantId').val()).child('restaurantUid').val() == $restaurantUid)))",
+        ".validate": "!newData.exists() || (newData.child('callId').isString() && newData.child('orderId').isString() && newData.child('restaurantUid').val() == $restaurantUid)"
+      }
+    },
+    "tripChats": {
+      ".read": false,
+      ".write": false,
+      "$orderId": {
+        "messages": {
+          ".indexOn": ["channel", "timestamp", "senderUid", "receiverUid"],
+          ".read": "auth != null && (root.child('admins').child(auth.uid).val() === true || (root.child('orders').child($orderId).child('deliveryUid').val() == auth.uid && (root.child('deliveryPartners').child(auth.uid).child('approved').val() === true || root.child('deliveryUsers').child(auth.uid).child('approvalStatus').val() === 'approved') && root.child('deliveryPartners').child(auth.uid).child('suspended').val() !== true && root.child('deliveryUsers').child(auth.uid).child('accountStatus').val() !== 'suspended') || (root.child('orders').child($orderId).child('customerUid').val() == auth.uid && query.orderByChild == 'channel' && query.equalTo == 'RIDER_CUSTOMER') || ((root.child('orders').child($orderId).child('restaurantUid').val() == auth.uid || root.child('orders').child($orderId).child('restaurantId').val() == auth.uid || root.child('restaurants').child(root.child('orders').child($orderId).child('restaurantId').val()).child('ownerUid').val() == auth.uid || root.child('restaurants').child(root.child('orders').child($orderId).child('restaurantId').val()).child('restaurantUid').val() == auth.uid || root.child('restaurants').child(root.child('orders').child($orderId).child('restaurantId').val()).child('uid').val() == auth.uid) && query.orderByChild == 'channel' && query.equalTo == 'RIDER_RESTAURANT'))",
+          "$messageId": {
+            ".read": "auth != null && (root.child('admins').child(auth.uid).val() === true || (root.child('orders').child($orderId).child('deliveryUid').val() == auth.uid && (root.child('deliveryPartners').child(auth.uid).child('approved').val() === true || root.child('deliveryUsers').child(auth.uid).child('approvalStatus').val() === 'approved')) || (data.child('channel').val() == 'RIDER_CUSTOMER' && root.child('orders').child($orderId).child('customerUid').val() == auth.uid) || (data.child('channel').val() == 'RIDER_RESTAURANT' && (root.child('orders').child($orderId).child('restaurantUid').val() == auth.uid || root.child('orders').child($orderId).child('restaurantId').val() == auth.uid || root.child('restaurants').child(root.child('orders').child($orderId).child('restaurantId').val()).child('ownerUid').val() == auth.uid || root.child('restaurants').child(root.child('orders').child($orderId).child('restaurantId').val()).child('restaurantUid').val() == auth.uid || root.child('restaurants').child(root.child('orders').child($orderId).child('restaurantId').val()).child('uid').val() == auth.uid)))",
+            ".write": "auth != null && root.child('orders').child($orderId).exists() && ((!data.exists() && root.child('orders').child($orderId).child('status').val() != 'DELIVERED' && root.child('orders').child($orderId).child('status').val() != 'CANCELLED' && newData.child('senderUid').val() == auth.uid && newData.child('messageType').val() == 'TEXT' && newData.child('message').isString() && newData.child('message').val().length > 0 && newData.child('message').val().length <= 500 && newData.child('timestamp').isNumber() && ((root.child('orders').child($orderId).child('deliveryUid').val() == auth.uid && (root.child('deliveryPartners').child(auth.uid).child('approved').val() === true || root.child('deliveryUsers').child(auth.uid).child('approvalStatus').val() === 'approved') && root.child('deliveryPartners').child(auth.uid).child('suspended').val() !== true && root.child('deliveryUsers').child(auth.uid).child('accountStatus').val() !== 'suspended' && newData.child('senderRole').val() == 'RIDER' && ((newData.child('channel').val() == 'RIDER_CUSTOMER' && newData.child('receiverUid').val() == root.child('orders').child($orderId).child('customerUid').val()) || newData.child('channel').val() == 'RIDER_RESTAURANT')) || (root.child('orders').child($orderId).child('customerUid').val() == auth.uid && newData.child('senderRole').val() == 'CUSTOMER' && newData.child('channel').val() == 'RIDER_CUSTOMER' && newData.child('receiverUid').val() == root.child('orders').child($orderId).child('deliveryUid').val()) || ((root.child('orders').child($orderId).child('restaurantUid').val() == auth.uid || root.child('orders').child($orderId).child('restaurantId').val() == auth.uid || root.child('restaurants').child(root.child('orders').child($orderId).child('restaurantId').val()).child('ownerUid').val() == auth.uid || root.child('restaurants').child(root.child('orders').child($orderId).child('restaurantId').val()).child('restaurantUid').val() == auth.uid || root.child('restaurants').child(root.child('orders').child($orderId).child('restaurantId').val()).child('uid').val() == auth.uid) && newData.child('senderRole').val() == 'RESTAURANT' && newData.child('channel').val() == 'RIDER_RESTAURANT' && newData.child('receiverUid').val() == root.child('orders').child($orderId).child('deliveryUid').val()))) || (data.exists() && newData.child('senderUid').val() == data.child('senderUid').val() && newData.child('senderRole').val() == data.child('senderRole').val() && newData.child('channel').val() == data.child('channel').val() && newData.child('receiverUid').val() == data.child('receiverUid').val() && newData.child('message').val() == data.child('message').val() && newData.child('messageType').val() == data.child('messageType').val() && newData.child('timestamp').val() == data.child('timestamp').val() && (newData.child('status').val() == 'DELIVERED' || newData.child('status').val() == 'READ') && (data.child('receiverUid').val() == auth.uid || (root.child('orders').child($orderId).child('deliveryUid').val() == auth.uid && data.child('senderUid').val() != auth.uid))))"
+          }
+        }
+      }
+    }
+  }
+}
