@@ -62,6 +62,54 @@ jobs:
           EOF
           npx cap add android
 
+      - name: Generate Android App Launcher Logo & Splash Screen
+        run: |
+          npm install --no-save --legacy-peer-deps @capacitor/assets
+          mkdir -p assets
+          node -e '
+            const fs = require("fs");
+            const sharp = require("sharp");
+            (async () => {
+              const candidates = [
+                "public/pwa-maskable-512x512.png",
+                "public/pwa-512x512.png",
+                "public/apple-touch-icon.png",
+                "public/icon-maskable.svg",
+                "public/icon.svg"
+              ];
+              const src = candidates.find(f => fs.existsSync(f));
+              if (!src) {
+                console.log("No app logo found in public/, skipping.");
+                process.exit(0);
+              }
+              console.log("Using app logo source:", src);
+              await sharp(src)
+                .resize(1024, 1024, { fit: "contain", background: { r: 5, g: 8, b: 17, alpha: 1 } })
+                .png()
+                .toFile("assets/logo.png");
+              const centeredLogo = await sharp("assets/logo.png").resize(640, 640).png().toBuffer();
+              await sharp({
+                create: {
+                  width: 2732,
+                  height: 2732,
+                  channels: 4,
+                  background: { r: 5, g: 8, b: 17, alpha: 1 }
+                }
+              })
+                .composite([{ input: centeredLogo, gravity: "center" }])
+                .png()
+                .toFile("assets/splash.png");
+            })().catch(err => { console.error(err); process.exit(1); });
+          '
+          if [ -f "assets/logo.png" ]; then
+            npx capacitor-assets generate --android \
+              --iconBackgroundColor '#050811' \
+              --iconBackgroundColorDark '#050811' \
+              --splashBackgroundColor '#050811' \
+              --splashBackgroundColorDark '#050811'
+          fi
+          rm -rf assets
+
       - name: Configure Firebase, Background GPS, Notification Icon & Permissions
         run: |
           if [ -f "public/assets/aistudio/google-services_1bf7436c.json" ]; then
@@ -78,7 +126,6 @@ jobs:
             fi
           fi
 
-          # Create monochrome white Android notification icon & green accent color
           mkdir -p android/app/src/main/res/drawable android/app/src/main/res/values
           cat << 'EOF' > android/app/src/main/res/drawable/ic_stat_notify.xml
           <?xml version="1.0" encoding="utf-8"?>
