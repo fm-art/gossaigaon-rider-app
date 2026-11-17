@@ -15,7 +15,6 @@ import type {
 } from '../types/rider';
 import {
   OUTGOING_RING_TIMEOUT_MS,
-  buildAnswerCallPatch,
   buildCustomerOutgoingCallPayload,
   buildDeclineCallPatch,
   buildEndCallPatch,
@@ -312,7 +311,6 @@ export function useCommunicationManager({
           return prev;
         });
 
-        // Stop ringing timer if callee answered signaling
         if (
           (peerRole === 'CUSTOMER' && val.customerAnswered) ||
           (peerRole === 'RESTAURANT' && val.restaurantAnswered)
@@ -320,7 +318,6 @@ export function useCommunicationManager({
           clearRingTimers();
         }
 
-        // Handle remote cancellation while still in inbox
         void peerUid;
       });
     },
@@ -578,6 +575,19 @@ export function useCommunicationManager({
         : prev,
     );
 
+    const answerFlag =
+      current.peerRole === 'CUSTOMER' ? {customerAnswered: true} : {restaurantAnswered: true};
+    void syncInboxAndCallRecord({
+      orderId: current.orderId,
+      peerRole: current.peerRole,
+      peerUid: current.peerUid,
+      patch: {
+        status: 'CONNECTING',
+        ...answerFlag,
+        updatedAt: Date.now(),
+      },
+    });
+
     try {
       const engine = createVoiceEngineForCall(
         current.orderId,
@@ -678,7 +688,6 @@ export function useCommunicationManager({
       });
 
       if (!validation.valid || !validation.callerRole || !validation.callId || !validation.orderId) {
-        // If current ringing popup matches this callId and remote status changed away from RINGING, dismiss cleanly
         const cur = callSessionRef.current;
         if (cur && cur.callId === inboxEntry.callId && cur.phase === 'INCOMING_RINGING') {
           teardownCallResources();
@@ -691,7 +700,6 @@ export function useCommunicationManager({
       const existing = callSessionRef.current;
       if (existing) {
         if (existing.callId === validation.callId) return;
-        // Rider already on another call -> send BUSY without interrupting active call
         const busyPatch = buildEndCallPatch({status: 'BUSY', reason: 'RIDER_BUSY'});
         const peerUid =
           validation.callerRole === 'CUSTOMER'
@@ -812,7 +820,6 @@ export function useCommunicationManager({
         const msgs = (snap.val() as Record<string, Partial<TripChatMessage>> | null) || {};
         setRawChatsByOrder((prev) => ({...prev, [orderId]: msgs}));
 
-        // Mark incoming SENT messages as DELIVERED, and READ if currently open
         const now = Date.now();
         Object.entries(msgs).forEach(([msgId, msg]) => {
           if (msg.receiverUid === riderUid && msg.senderUid !== riderUid) {
@@ -849,7 +856,6 @@ export function useCommunicationManager({
     riderUid,
   ]);
 
-  // Compute unread counts per order & channel + notify on new incoming messages
   const unreadByOrder = useMemo(() => {
     const map: Record<string, {customer: number; restaurant: number; total: number}> = {};
     let grandTotal = 0;
@@ -1015,7 +1021,6 @@ export function useCommunicationManager({
     [assignedOrders, demoActive, failedMessagesByOrder, rawChatsByOrder, riderUid, stores],
   );
 
-  // Teardown all VoIP resources on logout/disable/unmount
   useEffect(() => {
     if (!enabled) {
       teardownCallResources();
