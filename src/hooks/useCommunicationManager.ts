@@ -1,4 +1,5 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {Capacitor} from '@capacitor/core';
 import {onValue, push, ref, set, update} from 'firebase/database';
 import {db} from '../config/firebase';
 import type {
@@ -144,6 +145,8 @@ export function useCommunicationManager({
   const soundEnabledRef = useRef(soundEnabled);
   soundEnabledRef.current = soundEnabled;
   const prevUnreadTotalRef = useRef<number>(0);
+  const notifiedChatMsgIdsRef = useRef<Set<string>>(new Set());
+  const chatHydratedOrdersRef = useRef<Set<string>>(new Set());
 
   const isRiderApproved = riderData?.approved === true && riderData?.suspended !== true;
 
@@ -170,7 +173,6 @@ export function useCommunicationManager({
     }
   }, [clearRingTimers]);
 
-  // Real duration ticker strictly while genuine WebRTC call is CONNECTED
   useEffect(() => {
     if (!callSession || callSession.phase !== 'CONNECTED' || !callSession.connectedAt) {
       return;
@@ -182,7 +184,6 @@ export function useCommunicationManager({
     return () => window.clearInterval(id);
   }, [callSession?.phase, callSession?.connectedAt]);
 
-  // Ringing audio/vibration feedback while incoming call is ringing
   useEffect(() => {
     if (!callSession || callSession.phase !== 'INCOMING_RINGING') {
       if (ringtoneIntervalRef.current !== null) {
@@ -373,7 +374,6 @@ export function useCommunicationManager({
           });
           setCallStatusByOrder((prev) => ({...prev, [orderId]: 'CONNECTED'}));
 
-          // Firebase CONNECTED is ONLY written after genuine WebRTC peer audio connects
           const answerFlag =
             peerRole === 'CUSTOMER' ? {customerAnswered: true} : {restaurantAnswered: true};
           void syncInboxAndCallRecord({
@@ -747,7 +747,10 @@ export function useCommunicationManager({
         peerUid,
       );
 
-      if (typeof document !== 'undefined' && document.hidden) {
+      if (
+        Capacitor.isNativePlatform() ||
+        (typeof document !== 'undefined' && document.hidden)
+      ) {
         void showSystemPushNotification({
           title: `📞 Incoming ${validation.callerRole === 'CUSTOMER' ? 'Customer' : 'Restaurant'} Call`,
           body: `${validation.displayName} · Order #${validation.orderId.slice(-6)}`,
@@ -820,8 +823,13 @@ export function useCommunicationManager({
         const msgs = (snap.val() as Record<string, Partial<TripChatMessage>> | null) || {};
         setRawChatsByOrder((prev) => ({...prev, [orderId]: msgs}));
 
+        const isOrderHydrated = chatHydratedOrdersRef.current.has(orderId);
         const now = Date.now();
         Object.entries(msgs).forEach(([msgId, msg]) => {
+          if (!isOrderHydrated) {
+            notifiedChatMsgIdsRef.current.add(`${orderId}:${msgId}`);
+          }
+
           if (msg.receiverUid === riderUid && msg.senderUid !== riderUid) {
             const isCurrentlyOpen =
               openChatTarget?.orderId === orderId && openChatTarget?.initialChannel === msg.channel;
@@ -837,8 +845,27 @@ export function useCommunicationManager({
                 deliveredAt: now,
               }).catch(() => undefined);
             }
+
+            const dedupeKey = `${orderId}:${msgId}`;
+            if (
+              isOrderHydrated &&
+              !isCurrentlyOpen &&
+              msg.status !== 'READ' &&
+              !notifiedChatMsgIdsRef.current.has(dedupeKey)
+            ) {
+              notifiedChatMsgIdsRef.current.add(dedupeKey);
+              const senderLabel = msg.senderRole === 'RESTAURANT' ? 'Restaurant' : 'Customer';
+              void showSystemPushNotification({
+                title: `💬 New ${senderLabel} Message · #${orderId.slice(-6)}`,
+                body: String(msg.message || 'Tap to reply').slice(0, 120),
+                tag: `chat-${orderId}-${msgId}`,
+                tab: 'active',
+              });
+            }
           }
         });
+
+        chatHydratedOrdersRef.current.add(orderId);
       });
       unsubs.push(unsub);
     });
@@ -1026,6 +1053,8 @@ export function useCommunicationManager({
       teardownCallResources();
       setCallSession(null);
       setOpenChatTarget(null);
+      notifiedChatMsgIdsRef.current.clear();
+      chatHydratedOrdersRef.current.clear();
     }
     return () => {
       teardownCallResources();
