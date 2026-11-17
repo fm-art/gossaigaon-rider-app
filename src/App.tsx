@@ -1,5 +1,6 @@
 import {Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {Capacitor} from '@capacitor/core';
+import {Capacitor, CapacitorHttp, registerPlugin} from '@capacitor/core';
+import type {BackgroundGeolocationPlugin} from '@capacitor-community/background-geolocation';
 import {FirebaseAuthentication} from '@capacitor-firebase/authentication';
 import {
   getRedirectResult,
@@ -74,6 +75,7 @@ import {
   requestPushPermissionAndToken,
   showSystemPushNotification,
   subscribeForegroundFcm,
+  syncNativeNotificationPermission,
   triggerDeviceVibration,
 } from './utils/notifications';
 import {
@@ -126,6 +128,10 @@ import {
   verifyUpiSecurity,
   type SecurityEvent,
 } from './utils/security';
+
+const BackgroundGeolocation = registerPlugin<BackgroundGeolocationPlugin>(
+  'BackgroundGeolocation',
+);
 
 declare global {
   interface Window {
@@ -238,6 +244,8 @@ export default function App() {
   const pinGuardRef = useRef<Record<string, PinGuardState>>(loadPinGuards());
   const lastActivityMsRef = useRef<number>(Date.now());
   const lastTrailPointRef = useRef<{lat: number; lng: number} | null>(null);
+  const lastNativeHttpSyncMsRef = useRef<number>(0);
+  const nativePushPromptedRef = useRef<boolean>(false);
   const lastWatchDispatchMsRef = useRef(0);
   const lastWatchCoordsRef = useRef<{lat: number; lng: number} | null>(null);
   const prevGpsModeRef = useRef<BatteryGpsMode>('HIGH_ACCURACY');
@@ -566,7 +574,7 @@ export default function App() {
     };
   }, [demoActive]);
 
-  // Phase 1 RTDB subscriptions: Rider's own profile & Admin support info (allowed while pending/suspended)
+  // Phase 1 RTDB subscriptions: Rider's own profile & Admin support info
   useEffect(() => {
     if (demoActive || !currentUser) return;
     const uid = currentUser.uid;
@@ -771,14 +779,17 @@ export default function App() {
     };
   }, [demoActive, currentUser, accessEvaluation.gate, showToast]);
 
-  // Foreground FCM + Service Worker notification click routing
+  // Foreground FCM + Service Worker + Native Notification Bar click routing
   useEffect(() => {
     let unsubFcm: (() => void) | undefined;
-    void subscribeForegroundFcm((payload) => {
-      playAssignmentChime(soundEnabledRef.current);
-      showToast(`${payload.title}: ${payload.body}`, 'info');
-      void showSystemPushNotification(payload);
-    }).then((fn) => {
+    void subscribeForegroundFcm(
+      (payload) => {
+        playAssignmentChime(soundEnabledRef.current);
+        showToast(`${payload.title}: ${payload.body}`, 'info');
+        void showSystemPushNotification(payload);
+      },
+      (tab) => setActiveTab(tab),
+    ).then((fn) => {
       unsubFcm = fn;
     });
 
@@ -796,7 +807,31 @@ export default function App() {
     };
   }, [showToast]);
 
-  // Auto-sync FCM token only for approved active riders
+  // Sync native Android notification permission on launch and auto-prompt once after login
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    let active = true;
+    void syncNativeNotificationPermission().then((perm) => {
+      if (!active) return;
+      setPushPermission(perm);
+      if (
+        perm === 'default' &&
+        isDashboardUnlocked &&
+        currentUser &&
+        !nativePushPromptedRef.current
+      ) {
+        nativePushPromptedRef.current = true;
+        void requestPushPermissionAndToken(currentUser.uid).then((res) => {
+          if (active) setPushPermission(res.permission);
+        });
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [isDashboardUnlocked, currentUser]);
+
+  // Auto-sync FCM token for approved active riders
   useEffect(() => {
     if (!currentUser || !isDashboardUnlocked || pushPermission !== 'granted') return;
     void requestPushPermissionAndToken(currentUser.uid);
@@ -814,7 +849,7 @@ export default function App() {
         tab: 'active',
       });
     } else if (res.permission === 'denied') {
-      showToast('Push permission blocked in browser settings.', 'warning');
+      showToast('Notification permission blocked. Allow it in Phone App Settings.', 'warning');
     } else if (res.permission === 'unsupported') {
       showToast('Push notifications not supported on this browser.', 'info');
     }
@@ -836,7 +871,7 @@ export default function App() {
     }
   }, [soundEnabled, showToast]);
 
-  // Live 5-second GPS tracking + Wake Lock
+  // Live GPS Sync (WebSocket RTDB + Native CapacitorHttp REST fallback for background reliability)
   const pushRiderCoordinates = useCallback(
     (rawLat: number, rawLng: number) => {
       const lat = Number(Number(rawLat).toFixed(6));
@@ -899,20 +934,54 @@ export default function App() {
 
         void update(ref(db, `deliveryPartners/${currentUser.uid}`), riderUpdates);
 
-        Object.entries(assignedOrdersRef.current).forEach(([orderId, o]) => {
-          if (o.status !== 'DELIVERED' && o.status !== 'CANCELLED') {
-            void update(ref(db, `orders/${orderId}`), {
-              riderLat: lat,
-              riderLng: lng,
-              lastLocationUpdate: now,
-            });
-          }
+        const activeOrderIdsToSync = Object.entries(assignedOrdersRef.current)
+          .filter(([, o]) => o.status !== 'DELIVERED' && o.status !== 'CANCELLED')
+          .map(([orderId]) => orderId);
+
+        activeOrderIdsToSync.forEach((orderId) => {
+          void update(ref(db, `orders/${orderId}`), {
+            riderLat: lat,
+            riderLng: lng,
+            lastLocationUpdate: now,
+          });
         });
+
+        // Native OkHttp PATCH continues working even when Android Doze throttles WebView WebSockets
+        if (
+          Capacitor.isNativePlatform() &&
+          now - lastNativeHttpSyncMsRef.current >= 4000
+        ) {
+          lastNativeHttpSyncMsRef.current = now;
+          void currentUser
+            .getIdToken()
+            .then((idToken) => {
+              const authQ = `?auth=${encodeURIComponent(idToken)}`;
+              void CapacitorHttp.patch({
+                url: `${firebaseConfig.databaseURL}/deliveryPartners/${currentUser.uid}.json${authQ}`,
+                headers: {'Content-Type': 'application/json'},
+                data: riderUpdates,
+              }).catch(() => undefined);
+
+              activeOrderIdsToSync.forEach((orderId) => {
+                void CapacitorHttp.patch({
+                  url: `${firebaseConfig.databaseURL}/orders/${orderId}.json${authQ}`,
+                  headers: {'Content-Type': 'application/json'},
+                  data: {
+                    riderLat: lat,
+                    riderLng: lng,
+                    lastLocationUpdate: now,
+                  },
+                }).catch(() => undefined);
+              });
+            })
+            .catch(() => undefined);
+        }
       }
     },
     [demoActive, currentUser],
   );
 
+  // Foreground + Native Android Background GPS Tracking
   useEffect(() => {
     const isOnlineShift = Boolean(
       isDashboardUnlocked && riderData?.online && riderData?.suspended !== true,
@@ -922,7 +991,53 @@ export default function App() {
       setGpsSyncTime('Auto GPS Paused');
       return;
     }
-    if (!navigator.geolocation) return;
+
+    let bgWatcherId: string | null = null;
+    let bgCancelled = false;
+
+    if (Capacitor.isNativePlatform()) {
+      void BackgroundGeolocation.addWatcher(
+        {
+          backgroundTitle: 'Chutki Fleet • Live GPS Active',
+          backgroundMessage: 'Tracking delivery location in background. Go Offline to stop.',
+          requestPermissions: true,
+          stale: false,
+          distanceFilter: 10,
+        },
+        (location, error) => {
+          if (bgCancelled) return;
+          if (error) {
+            if (error.code === 'NOT_AUTHORIZED') {
+              showToast(
+                'Enable Location ("Allow all the time") in App Settings for background GPS.',
+                'warning',
+              );
+            }
+            return;
+          }
+          if (location) {
+            pushRiderCoordinates(location.latitude, location.longitude);
+          }
+        },
+      )
+        .then((id) => {
+          if (bgCancelled) {
+            void BackgroundGeolocation.removeWatcher({id}).catch(() => undefined);
+          } else {
+            bgWatcherId = id;
+          }
+        })
+        .catch(() => undefined);
+    }
+
+    if (!navigator.geolocation) {
+      return () => {
+        bgCancelled = true;
+        if (bgWatcherId) {
+          void BackgroundGeolocation.removeWatcher({id: bgWatcherId}).catch(() => undefined);
+        }
+      };
+    }
 
     const syncOnce = () => {
       if (isSyncingGpsRef.current) return;
@@ -936,7 +1051,7 @@ export default function App() {
         },
         () => {
           isSyncingGpsRef.current = false;
-          setGpsSyncTime('Waiting for GPS...');
+          if (!bgWatcherId) setGpsSyncTime('Waiting for GPS...');
         },
         {
           enableHighAccuracy: gpsPolicy.enableHighAccuracy,
@@ -1001,6 +1116,10 @@ export default function App() {
     }
 
     return () => {
+      bgCancelled = true;
+      if (bgWatcherId) {
+        void BackgroundGeolocation.removeWatcher({id: bgWatcherId}).catch(() => undefined);
+      }
       isSyncingGpsRef.current = false;
       navigator.geolocation.clearWatch(watchId);
       clearInterval(intervalId);
@@ -1019,9 +1138,10 @@ export default function App() {
     gpsPolicy.minWatchDispatchMs,
     gpsPolicy.minDistanceMeters,
     pushRiderCoordinates,
+    showToast,
   ]);
 
-  // Android APK Background GPS Bridge (15s interval)
+  // Android APK Background GPS Bridge (15s interval - legacy hook if custom bridge exists)
   useEffect(() => {
     if (
       window.AndroidBridge &&
@@ -1131,7 +1251,6 @@ export default function App() {
     [activeTrips],
   );
 
-  // Adaptive timer tick: 1s only during live auto-pass countdowns, 30s otherwise for shift compliance
   useEffect(() => {
     const tick = () => {
       const now = Date.now();
@@ -1159,7 +1278,6 @@ export default function App() {
     return () => clearInterval(timer);
   }, [hasUnacceptedTrip, activeTrips, acceptTimeoutSec, passTripToNextRider]);
 
-  // Persistent PIN brute-force countdown ticker while verification modal is open
   useEffect(() => {
     if (!verifyModalState.open || !verifyModalState.tripId) {
       setPinLockRemainingSec(0);
@@ -1177,7 +1295,6 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [verifyModalState.open, verifyModalState.tripId]);
 
-  // 15-minute inactivity terminal lock
   useEffect(() => {
     if (!isDashboardUnlocked || !idleLockEnabled || terminalLocked) return;
 
@@ -1203,7 +1320,6 @@ export default function App() {
     };
   }, [isDashboardUnlocked, idleLockEnabled, terminalLocked, logThreat]);
 
-  // History / Android back button navigation
   const switchNav = useCallback(
     (tabName: RiderTab, pushHistory = true) => {
       if (tabName !== activeTabRef.current) {
@@ -1265,7 +1381,6 @@ export default function App() {
     return () => window.removeEventListener('popstate', handlePop);
   }, [switchNav, showToast, comm]);
 
-  // Rider actions
   const handleToggleSound = () => {
     triggerCue('tap');
     setSoundEnabled((prev) => {
@@ -1306,7 +1421,7 @@ export default function App() {
     }).then(() => {
       triggerCue(newStatus ? 'dutyOn' : 'dutyOff');
       showToast(
-        newStatus ? 'Duty ON: Live 5s GPS active!' : 'Duty OFF: Shift Ended.',
+        newStatus ? 'Duty ON: Live Background GPS active!' : 'Duty OFF: Shift Ended.',
         newStatus ? 'success' : 'info',
       );
     });
