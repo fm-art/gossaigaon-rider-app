@@ -15,7 +15,7 @@ import {
 import {
   calculateDistanceKm,
   calculateOptimalDeliverySequence,
-  getRiderFeeForOrder,
+  getOrderEarningBreakdown,
   getStorePickupCode,
   isTripPickedUp,
   normalizeOrderItems,
@@ -124,11 +124,29 @@ export const ActiveTripsTab = memo(function ActiveTripsTab({
 
             let totalBillAmt = 0;
             let totalTripFee = 0;
+            let totalDistanceKm = 0;
+            let hasDistanceBreakdown = false;
+            let activeBaseFee = 15;
+            let activePerKmRate = 8;
             const allItems: Array<{name: string; qty: number}> = [];
 
             trip.orders.forEach((o) => {
               totalBillAmt += Number(o.totalAmount || 0);
-              totalTripFee += getRiderFeeForOrder(o, baseRiderFeePerTrip);
+              const breakdown = getOrderEarningBreakdown(
+                o,
+                baseRiderFeePerTrip,
+                stores,
+                adminSettings,
+                riderCurrentLat,
+                riderCurrentLng,
+              );
+              totalTripFee += breakdown.fee;
+              activeBaseFee = breakdown.baseFee;
+              activePerKmRate = breakdown.perKmRate;
+              if (breakdown.distanceKm !== null) {
+                totalDistanceKm += breakdown.distanceKm;
+                hasDistanceBreakdown = true;
+              }
               normalizeOrderItems(o.items).forEach((item) => allItems.push(item));
             });
 
@@ -217,7 +235,7 @@ export const ActiveTripsTab = memo(function ActiveTripsTab({
                           fontWeight: 700,
                         }}
                       >
-                        Your Earning
+                        Your Earning (Distance Pay)
                       </span>
                       <div
                         className="tabular-nums"
@@ -225,6 +243,14 @@ export const ActiveTripsTab = memo(function ActiveTripsTab({
                       >
                         +₹{totalTripFee.toFixed(0)}
                       </div>
+                      {hasDistanceBreakdown && (
+                        <div
+                          className="tabular-nums"
+                          style={{fontSize: '0.71rem', color: '#86efac', fontWeight: 700, marginTop: '2px'}}
+                        >
+                          📏 {totalDistanceKm.toFixed(1)} km · ₹{activeBaseFee} Base + ₹{activePerKmRate}/km
+                        </div>
+                      )}
                     </div>
                     <div style={{textAlign: 'right'}}>
                       <span
@@ -460,7 +486,11 @@ export const ActiveTripsTab = memo(function ActiveTripsTab({
                       className="tabular-nums"
                       style={{fontSize: '0.75rem', color: '#38bdf8', fontWeight: 700}}
                     >
-                      Earning +₹{totalTripFee.toFixed(0)} · #{trip.tripId.slice(-6)}
+                      Earning +₹{totalTripFee.toFixed(0)}
+                      {hasDistanceBreakdown
+                        ? ` (${totalDistanceKm.toFixed(1)} km · ₹${activeBaseFee}+₹${activePerKmRate}/km)`
+                        : ''}{' '}
+                      · #{trip.tripId.slice(-6)}
                     </div>
                   </div>
                   <span className={`order-status-pill ${allStoresPickedUp ? 'pill-out' : 'pill-ready'}`}>
