@@ -15,6 +15,7 @@ import type {
   RiderPayoutRecord,
   RiderRating,
   SettlementRecord,
+  StoreInfo,
   TripGroup,
 } from '../types/rider';
 import {
@@ -33,6 +34,7 @@ interface EarningsTabProps {
   completedTrips: TripGroup[];
   allOrders: Record<string, OrderRecord>;
   allRiders: Record<string, RiderData>;
+  stores?: Record<string, StoreInfo>;
   currentRiderUid: string;
   onOpenPayoutModal: () => void;
   onOpenDepositModal: () => void;
@@ -49,6 +51,7 @@ export const EarningsTab = memo(function EarningsTab({
   completedTrips,
   allOrders,
   allRiders,
+  stores,
   currentRiderUid,
   onOpenPayoutModal,
   onOpenDepositModal,
@@ -81,9 +84,29 @@ export const EarningsTab = memo(function EarningsTab({
         ? Number(adminSettings.deliveryCharge)
         : 25;
 
+  const activeBaseFee =
+    adminSettings.riderBaseFee && Number(adminSettings.riderBaseFee) > 0
+      ? Number(adminSettings.riderBaseFee)
+      : 15;
+  const activePerKmRate =
+    adminSettings.riderPerKmRate && Number(adminSettings.riderPerKmRate) > 0
+      ? Number(adminSettings.riderPerKmRate)
+      : 8;
+  const activeMinFee =
+    adminSettings.riderMinFee && Number(adminSettings.riderMinFee) > 0
+      ? Number(adminSettings.riderMinFee)
+      : 20;
+
   const last7Days = useMemo(
-    () => calculateLast7DaysPerformance(completedTrips, baseRiderFeePerTrip),
-    [completedTrips, baseRiderFeePerTrip],
+    () =>
+      calculateLast7DaysPerformance(
+        completedTrips,
+        baseRiderFeePerTrip,
+        undefined,
+        stores,
+        adminSettings,
+      ),
+    [completedTrips, baseRiderFeePerTrip, stores, adminSettings],
   );
 
   const sevenDayTotals = useMemo(
@@ -162,6 +185,12 @@ export const EarningsTab = memo(function EarningsTab({
                 style={{fontSize: '1.85rem', fontWeight: 800, color: '#38bdf8'}}
               >
                 ₹{financials.availablePayoutBalance.toFixed(2)}
+              </div>
+              <div
+                className="tabular-nums"
+                style={{fontSize: '0.72rem', color: '#34d399', fontWeight: 700, marginTop: '2px'}}
+              >
+                📏 Distance Rate: ₹{activeBaseFee} Base + ₹{activePerKmRate}/km (Min ₹{activeMinFee})
               </div>
               <div style={{fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px'}}>
                 UPI:{' '}
