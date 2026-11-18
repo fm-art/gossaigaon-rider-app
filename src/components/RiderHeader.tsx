@@ -1,4 +1,4 @@
-import {memo} from 'react';
+import {memo, useEffect, useState} from 'react';
 import type {AdminSettings, RiderData} from '../types/rider';
 import type {BatteryStatusSnapshot, GpsTrackingPolicy} from '../utils/riderLogic';
 import {PWAInstallButton} from './PWAInstallButton';
@@ -34,10 +34,18 @@ export const RiderHeader = memo(function RiderHeader({
   onEnablePush,
   onOpenDeposit,
 }: RiderHeaderProps) {
+  const [avatarFailed, setAvatarFailed] = useState(false);
+
+  useEffect(() => {
+    setAvatarFailed(false);
+  }, [riderData?.profilePhoto]);
+
   const isOnline = Boolean(riderData?.online && riderData?.suspended !== true);
   const ratingValue = riderData?.ratingCount
     ? `★ ${Number(riderData.ratingAvg || 5).toFixed(1)} (${riderData.ratingCount})`
     : 'New Rider';
+
+  const showProfileImg = Boolean(riderData?.profilePhoto && !avatarFailed);
 
   return (
     <>
@@ -45,11 +53,12 @@ export const RiderHeader = memo(function RiderHeader({
         <header className="rider-header">
           <div className="rider-meta">
             <div className="rider-avatar" style={{overflow: 'hidden'}}>
-              {riderData?.profilePhoto ? (
+              {showProfileImg ? (
                 <img
-                  src={riderData.profilePhoto}
+                  src={riderData?.profilePhoto}
                   alt={riderData?.name || riderData?.fullName || 'Rider'}
-                  style={{width: '100%', height: '100%', objectFit: 'cover'}}
+                  style={{width: '100%', height: '100%', objectFit: 'cover', display: 'block'}}
+                  onError={() => setAvatarFailed(true)}
                 />
               ) : (
                 <i className="fa-solid fa-motorcycle" />
@@ -67,7 +76,7 @@ export const RiderHeader = memo(function RiderHeader({
                   whiteSpace: 'nowrap',
                 }}
               >
-                {riderData?.name || 'Gossaigaon Rider'}
+                {riderData?.name || 'Chutki Rider'}
               </h4>
               <div
                 style={{
@@ -297,7 +306,7 @@ export const RiderHeader = memo(function RiderHeader({
         <div id="approval-banner" className="approval-banner">
           <i className="fa-solid fa-triangle-exclamation" style={{fontSize: '1.1rem', color: 'var(--warning)'}} />
           <div>
-            <strong>Approval Pending:</strong> Your account is under verification by Gossaigaon Bazar Admin.
+            <strong>Approval Pending:</strong> Your account is under verification by Chutki Admin.
           </div>
         </div>
       )}
