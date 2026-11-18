@@ -146,6 +146,7 @@ declare global {
         activeOrderIds: string,
       ) => void;
       stopTracking: () => void;
+      setSpeakerphoneOn?: (enabled: boolean) => void;
     };
   }
 }
@@ -1143,17 +1144,17 @@ export default function App() {
     showToast,
   ]);
 
-  // Android APK Background GPS Bridge (15s interval - legacy hook if custom bridge exists)
+  // Native Android Foreground Service Bridge (keeps Calls, Orders, Chat & GPS alive even when app is swiped closed!)
   useEffect(() => {
-    if (
-      window.AndroidBridge &&
-      (!isDashboardUnlocked || !currentUser || !riderData?.online || riderData?.suspended === true || !autoGpsEnabled)
-    ) {
-      window.AndroidBridge.stopTracking();
-    }
-    const interval = setInterval(async () => {
+    const syncNativeBridge = async () => {
       if (!window.AndroidBridge) return;
-      if (isDashboardUnlocked && currentUser && riderData?.online && riderData?.suspended !== true && autoGpsEnabled) {
+      if (
+        isDashboardUnlocked &&
+        currentUser &&
+        riderData?.online &&
+        riderData?.suspended !== true &&
+        autoGpsEnabled
+      ) {
         try {
           const idToken = await currentUser.getIdToken();
           const activeIds = Object.entries(assignedOrders)
@@ -1171,12 +1172,31 @@ export default function App() {
         } catch {
           // ignore
         }
-      } else {
+      } else if (
+        authReady &&
+        (!currentUser ||
+          (profileLoaded &&
+            (riderData?.online === false || riderData?.suspended === true || !autoGpsEnabled)))
+      ) {
         window.AndroidBridge.stopTracking();
       }
+    };
+
+    void syncNativeBridge();
+    const interval = setInterval(() => {
+      void syncNativeBridge();
     }, 15000);
     return () => clearInterval(interval);
-  }, [isDashboardUnlocked, currentUser, riderData?.online, riderData?.suspended, autoGpsEnabled, assignedOrders]);
+  }, [
+    authReady,
+    profileLoaded,
+    isDashboardUnlocked,
+    currentUser,
+    riderData?.online,
+    riderData?.suspended,
+    autoGpsEnabled,
+    assignedOrders,
+  ]);
 
   // Pass Trip to nearest eligible rider
   const passTripToNextRider = useCallback(
@@ -2073,6 +2093,9 @@ export default function App() {
     setOrdersHydrated(false);
     knownActiveTripIdsRef.current = null;
     prevActiveTripCountRef.current = null;
+    if (window.AndroidBridge) {
+      window.AndroidBridge.stopTracking();
+    }
     if (demoActive) {
       setDemoActive(false);
       return;
