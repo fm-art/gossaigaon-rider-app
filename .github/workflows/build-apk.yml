@@ -55,7 +55,8 @@ jobs:
               },
               "LocalNotifications": {
                 "smallIcon": "ic_stat_notify",
-                "iconColor": "#16A34A"
+                "iconColor": "#16A34A",
+                "sound": "chutki_order_alert.wav"
               }
             }
           }
@@ -110,7 +111,7 @@ jobs:
           fi
           rm -rf assets
 
-      - name: Configure Always-On Native Background Service, Calls, Orders, GPS & Permissions
+      - name: Generate Custom Chutki Ringtone, Background Service & Permissions
         run: |
           STRINGS_FILE="android/app/src/main/res/values/strings.xml"
           if [ -f "$STRINGS_FILE" ]; then
@@ -138,7 +139,82 @@ jobs:
             fi
           fi
 
-          mkdir -p android/app/src/main/res/drawable android/app/src/main/res/values
+          mkdir -p android/app/src/main/res/drawable android/app/src/main/res/values android/app/src/main/res/raw
+
+          # Synthesize Chutki Rider Custom Call Ringtone & Order Alert WAV files
+          node -e '
+            const fs = require("fs");
+
+            function writeWavFile(filePath, durationSec, notes) {
+              const sampleRate = 22050;
+              const numSamples = Math.floor(sampleRate * durationSec);
+              const dataSize = numSamples * 2;
+              const buf = Buffer.alloc(44 + dataSize);
+
+              buf.write("RIFF", 0);
+              buf.writeUInt32LE(36 + dataSize, 4);
+              buf.write("WAVE", 8);
+              buf.write("fmt ", 12);
+              buf.writeUInt32LE(16, 16);
+              buf.writeUInt16LE(1, 20);
+              buf.writeUInt16LE(1, 22);
+              buf.writeUInt32LE(sampleRate, 24);
+              buf.writeUInt32LE(sampleRate * 2, 28);
+              buf.writeUInt16LE(2, 32);
+              buf.writeUInt16LE(16, 34);
+              buf.write("data", 36);
+              buf.writeUInt32LE(dataSize, 40);
+
+              for (let i = 0; i < numSamples; i++) {
+                const t = i / sampleRate;
+                let sample = 0;
+                for (const n of notes) {
+                  if (t >= n.start && t < n.start + n.dur) {
+                    const localT = t - n.start;
+                    const attack = Math.min(1, localT / 0.012);
+                    const decay = Math.exp(-3.2 * (localT / n.dur));
+                    const env = attack * decay;
+                    const w1 = Math.sin(2 * Math.PI * n.freq * localT);
+                    const w2 = 0.45 * Math.sin(2 * Math.PI * (n.freq * 2) * localT);
+                    const w3 = 0.2 * Math.sin(2 * Math.PI * (n.freq * 3) * localT);
+                    sample += env * (w1 + w2 + w3) * (n.amp || 0.55);
+                  }
+                }
+                const clamped = Math.max(-0.98, Math.min(0.98, sample));
+                buf.writeInt16LE(Math.floor(clamped * 32767), 44 + i * 2);
+              }
+              fs.writeFileSync(filePath, buf);
+            }
+
+            // 1. Custom Chutki Rider Call Ringtone (3.0s catchy marimba/bell melody + urgent trill)
+            const ringtoneNotes = [
+              // Phrase 1: Upbeat Chutki signature arpeggio (C5 - E5 - G5 - C6)
+              { start: 0.00, dur: 0.16, freq: 523.25, amp: 0.65 },
+              { start: 0.14, dur: 0.16, freq: 659.25, amp: 0.65 },
+              { start: 0.28, dur: 0.18, freq: 783.99, amp: 0.70 },
+              { start: 0.44, dur: 0.34, freq: 1046.50, amp: 0.78 },
+              // Phrase 2: Answering melodic cadence (A5 - G5 - E5 - G5 - C6)
+              { start: 0.88, dur: 0.15, freq: 880.00, amp: 0.65 },
+              { start: 1.02, dur: 0.15, freq: 783.99, amp: 0.65 },
+              { start: 1.16, dur: 0.15, freq: 659.25, amp: 0.65 },
+              { start: 1.30, dur: 0.18, freq: 783.99, amp: 0.72 },
+              { start: 1.48, dur: 0.42, freq: 1046.50, amp: 0.82 },
+              // Phrase 3: Double high-visibility call bell pulse
+              { start: 2.02, dur: 0.18, freq: 1174.66, amp: 0.75 },
+              { start: 2.22, dur: 0.36, freq: 1318.51, amp: 0.82 }
+            ];
+            writeWavFile("android/app/src/main/res/raw/chutki_ringtone.wav", 3.0, ringtoneNotes);
+
+            // 2. Custom Chutki Order / Message Alert Chime (1.2s bright 4-note dispatch chime)
+            const alertNotes = [
+              { start: 0.00, dur: 0.16, freq: 587.33, amp: 0.70 },
+              { start: 0.14, dur: 0.16, freq: 783.99, amp: 0.72 },
+              { start: 0.28, dur: 0.18, freq: 987.77, amp: 0.75 },
+              { start: 0.44, dur: 0.50, freq: 1174.66, amp: 0.85 }
+            ];
+            writeWavFile("android/app/src/main/res/raw/chutki_order_alert.wav", 1.15, alertNotes);
+          '
+
           cat << 'EOF' > android/app/src/main/res/drawable/ic_stat_notify.xml
           <?xml version="1.0" encoding="utf-8"?>
           <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -161,6 +237,96 @@ jobs:
 
           JAVA_DIR="android/app/src/main/java/com/gossaigaon/rider"
           mkdir -p "$JAVA_DIR"
+
+          cat << 'EOF' > "$JAVA_DIR/RingtoneController.java"
+          package com.gossaigaon.rider;
+
+          import android.content.Context;
+          import android.content.res.AssetFileDescriptor;
+          import android.media.AudioAttributes;
+          import android.media.AudioManager;
+          import android.media.MediaPlayer;
+          import android.os.Build;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.os.VibrationEffect;
+          import android.os.Vibrator;
+
+          public class RingtoneController {
+              private static MediaPlayer mediaPlayer;
+              private static Vibrator vibrator;
+              private static final Handler handler = new Handler(Looper.getMainLooper());
+              private static final Runnable autoStopRunnable = () -> stop(null);
+
+              public static synchronized void start(Context context) {
+                  if (context == null) return;
+                  final Context appCtx = context.getApplicationContext();
+                  handler.post(() -> {
+                      try {
+                          stopInternal();
+                          AssetFileDescriptor afd = appCtx.getResources().openRawResourceFd(R.raw.chutki_ringtone);
+                          if (afd == null) return;
+
+                          mediaPlayer = new MediaPlayer();
+                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                              mediaPlayer.setAudioAttributes(
+                                  new AudioAttributes.Builder()
+                                      .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                                      .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                                      .build()
+                              );
+                          } else {
+                              mediaPlayer.setAudioStreamType(AudioManager.STREAM_RING);
+                          }
+                          mediaPlayer.setDataSource(afd.getFileDescriptor(), afd.getStartOffset(), afd.getLength());
+                          afd.close();
+                          mediaPlayer.setLooping(true);
+                          mediaPlayer.setVolume(1.0f, 1.0f);
+                          mediaPlayer.prepare();
+                          mediaPlayer.start();
+
+                          vibrator = (Vibrator) appCtx.getSystemService(Context.VIBRATOR_SERVICE);
+                          if (vibrator != null && vibrator.hasVibrator()) {
+                              long[] pattern = new long[]{0, 500, 300, 500, 600};
+                              if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                  vibrator.vibrate(VibrationEffect.createWaveform(pattern, 0));
+                              } else {
+                                  vibrator.vibrate(pattern, 0);
+                              }
+                          }
+
+                          handler.removeCallbacks(autoStopRunnable);
+                          handler.postDelayed(autoStopRunnable, 45000L);
+                      } catch (Exception ignored) {}
+                  });
+              }
+
+              public static synchronized void stop(Context context) {
+                  handler.post(RingtoneController::stopInternal);
+              }
+
+              private static void stopInternal() {
+                  handler.removeCallbacks(autoStopRunnable);
+                  if (mediaPlayer != null) {
+                      try {
+                          if (mediaPlayer.isPlaying()) {
+                              mediaPlayer.stop();
+                          }
+                      } catch (Exception ignored) {}
+                      try {
+                          mediaPlayer.release();
+                      } catch (Exception ignored) {}
+                      mediaPlayer = null;
+                  }
+                  if (vibrator != null) {
+                      try {
+                          vibrator.cancel();
+                      } catch (Exception ignored) {}
+                      vibrator = null;
+                  }
+              }
+          }
+          EOF
 
           cat << 'EOF' > "$JAVA_DIR/MainActivity.java"
           package com.gossaigaon.rider;
@@ -255,9 +421,20 @@ jobs:
                   try {
                       SharedPreferences prefs = context.getSharedPreferences("ChutkiRiderBgPrefs", Context.MODE_PRIVATE);
                       prefs.edit().putBoolean("trackingActive", false).apply();
+                      RingtoneController.stop(context);
                       Intent serviceIntent = new Intent(context, RiderForegroundService.class);
                       context.stopService(serviceIntent);
                   } catch (Exception ignored) {}
+              }
+
+              @JavascriptInterface
+              public void startRingtone() {
+                  RingtoneController.start(context);
+              }
+
+              @JavascriptInterface
+              public void stopRingtone() {
+                  RingtoneController.stop(context);
               }
 
               @JavascriptInterface
@@ -319,7 +496,6 @@ jobs:
           import android.location.LocationListener;
           import android.location.LocationManager;
           import android.media.AudioAttributes;
-          import android.media.RingtoneManager;
           import android.net.Uri;
           import android.os.Build;
           import android.os.Bundle;
@@ -350,8 +526,8 @@ jobs:
 
           public class RiderForegroundService extends Service implements LocationListener {
               private static final String CHANNEL_BG = "chutki_bg_service";
-              private static final String CHANNEL_CALLS = "chutki_urgent_calls";
-              private static final String CHANNEL_ALERTS = "chutki_urgent_alerts";
+              private static final String CHANNEL_CALLS = "chutki_calls_custom_v1";
+              private static final String CHANNEL_ALERTS = "chutki_alerts_custom_v1";
               private static final int FG_NOTIFICATION_ID = 1001;
 
               private ScheduledExecutorService scheduler;
@@ -445,7 +621,7 @@ jobs:
                                   latestLat = lastGps.getLatitude();
                                   latestLng = lastGps.getLongitude();
                               }
-                              locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 5000L, 5f, this);
+                              locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 5000L, 0f, this);
                           } catch (SecurityException ignored) {}
                           try {
                               Location lastNet = locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
@@ -453,7 +629,7 @@ jobs:
                                   latestLat = lastNet.getLatitude();
                                   latestLng = lastNet.getLongitude();
                               }
-                              locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 5000L, 5f, this);
+                              locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 5000L, 0f, this);
                           } catch (SecurityException ignored) {}
                       } catch (Exception ignored) {}
                   });
@@ -481,6 +657,7 @@ jobs:
                   try {
                       SharedPreferences prefs = getSharedPreferences("ChutkiRiderBgPrefs", MODE_PRIVATE);
                       if (!prefs.getBoolean("trackingActive", false)) {
+                          RingtoneController.stop(getApplicationContext());
                           stopSelf();
                           return;
                       }
@@ -503,7 +680,7 @@ jobs:
 
                       String authParam = "?auth=" + URLEncoder.encode(idToken, "UTF-8");
 
-                      // 1. Check Incoming Call Inbox
+                      // 1. Check Incoming Call Inbox & Trigger Custom Ringtone
                       HttpResult callRes = httpGet(dbUrl + "/riderCallInbox/" + uid + ".json" + authParam);
                       if (callRes.code == 401 && !refreshToken.isEmpty() && !apiKey.isEmpty()) {
                           String refreshed = refreshFirebaseIdToken(apiKey, refreshToken);
@@ -521,14 +698,27 @@ jobs:
                           String callId = callObj.optString("callId", "");
                           long updatedAt = callObj.optLong("updatedAt", callObj.optLong("startedAt", 0L));
                           long ageMs = Math.abs(System.currentTimeMillis() - updatedAt);
-                          if ("RINGING".equals(status) && !callId.isEmpty() && ageMs < 65000L && !callId.equals(lastNotifiedCallId)) {
-                              lastNotifiedCallId = callId;
-                              String callerRole = callObj.optString("callerRole", "CUSTOMER");
-                              String callerName = "RESTAURANT".equals(callerRole)
-                                  ? callObj.optString("restaurantName", "Restaurant")
-                                  : callObj.optString("customerLabel", "Customer");
-                              showUrgentCallNotification(callerRole, callerName, callObj.optString("orderId", ""));
+                          if ("RINGING".equals(status) && !callId.isEmpty() && ageMs < 65000L) {
+                              if (!callId.equals(lastNotifiedCallId)) {
+                                  lastNotifiedCallId = callId;
+                                  String callerRole = callObj.optString("callerRole", "CUSTOMER");
+                                  String callerName = "RESTAURANT".equals(callerRole)
+                                      ? callObj.optString("restaurantName", "Restaurant")
+                                      : callObj.optString("customerLabel", "Customer");
+                                  RingtoneController.start(getApplicationContext());
+                                  showUrgentCallNotification(callerRole, callerName, callObj.optString("orderId", ""));
+                              }
+                          } else if (!lastNotifiedCallId.isEmpty()) {
+                              lastNotifiedCallId = "";
+                              RingtoneController.stop(getApplicationContext());
+                              NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                              if (nm != null) nm.cancel(3001);
                           }
+                      } else if (!lastNotifiedCallId.isEmpty()) {
+                          lastNotifiedCallId = "";
+                          RingtoneController.stop(getApplicationContext());
+                          NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                          if (nm != null) nm.cancel(3001);
                       }
 
                       // 2. Check Assigned Orders & Ready Status
@@ -733,31 +923,31 @@ jobs:
                   bgChannel.setDescription("Keeps Rider online for incoming calls, orders and live GPS");
                   nm.createNotificationChannel(bgChannel);
 
-                  Uri ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
+                  Uri customRingUri = Uri.parse("android.resource://" + getPackageName() + "/" + R.raw.chutki_ringtone);
                   AudioAttributes ringAttrs = new AudioAttributes.Builder()
                       .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
                       .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                       .build();
                   NotificationChannel callChannel = new NotificationChannel(
                       CHANNEL_CALLS,
-                      "Incoming Voice Calls",
+                      "Chutki Incoming Calls",
                       NotificationManager.IMPORTANCE_HIGH
                   );
                   callChannel.enableVibration(true);
                   callChannel.setVibrationPattern(new long[]{0, 500, 300, 500, 300, 500});
-                  callChannel.setSound(ringtoneUri, ringAttrs);
+                  callChannel.setSound(customRingUri, ringAttrs);
                   callChannel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
                   nm.createNotificationChannel(callChannel);
 
-                  Uri alertUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
+                  Uri customAlertUri = Uri.parse("android.resource://" + getPackageName() + "/" + R.raw.chutki_order_alert);
                   NotificationChannel alertChannel = new NotificationChannel(
                       CHANNEL_ALERTS,
-                      "New Trip & Chat Alerts",
+                      "Chutki Trip & Chat Alerts",
                       NotificationManager.IMPORTANCE_HIGH
                   );
                   alertChannel.enableVibration(true);
                   alertChannel.setVibrationPattern(new long[]{0, 300, 150, 300});
-                  alertChannel.setSound(alertUri, new AudioAttributes.Builder()
+                  alertChannel.setSound(customAlertUri, new AudioAttributes.Builder()
                       .setUsage(AudioAttributes.USAGE_NOTIFICATION)
                       .build());
                   alertChannel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
@@ -817,9 +1007,12 @@ jobs:
                           builder.setCategory(Notification.CATEGORY_CALL).setColor(0xFF16A34A);
                       }
 
+                      Notification notif = builder.build();
+                      notif.flags |= Notification.FLAG_INSISTENT;
+
                       NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
                       if (nm != null) {
-                          nm.notify(3001, builder.build());
+                          nm.notify(3001, notif);
                       }
 
                       try {
@@ -862,6 +1055,7 @@ jobs:
 
               @Override
               public void onDestroy() {
+                  RingtoneController.stop(getApplicationContext());
                   if (scheduler != null) {
                       scheduler.shutdownNow();
                   }
