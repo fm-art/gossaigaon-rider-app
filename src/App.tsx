@@ -87,6 +87,7 @@ import {
   evaluateShiftCompliance,
   formatShiftTime12h,
   getDemoSeedState,
+  getOrderEarningBreakdown,
   getTripsGrouped,
   isTripPickedUp,
   isValidShiftHours,
@@ -422,8 +423,10 @@ export default function App() {
         riderSettlements,
         myRiderPayouts,
         baseRiderFeePerTrip,
+        stores,
+        adminSettings,
       ),
-    [assignedOrders, riderSettlements, myRiderPayouts, baseRiderFeePerTrip],
+    [assignedOrders, riderSettlements, myRiderPayouts, baseRiderFeePerTrip, stores, adminSettings],
   );
 
   const batteryStatus = useBatteryStatus();
@@ -1677,12 +1680,22 @@ export default function App() {
       setAssignedOrders((prev) => {
         const next = {...prev};
         trip.orders.forEach((o) => {
+          const breakdown = getOrderEarningBreakdown(
+            o,
+            baseRiderFeePerTrip,
+            stores,
+            adminSettings,
+            riderCurrentLat,
+            riderCurrentLng,
+          );
           next[o.orderId] = {
             ...next[o.orderId],
             status: 'DELIVERED',
             verificationMethod: 'PIN',
             verifiedAt,
             updatedAt: verifiedAt,
+            riderEarnedFee: breakdown.fee,
+            ...(breakdown.distanceKm !== null ? {riderDistanceKm: breakdown.distanceKm} : {}),
           };
         });
         return next;
@@ -1695,14 +1708,24 @@ export default function App() {
     }
 
     void Promise.all(
-      trip.orders.map((o) =>
-        update(ref(db, `orders/${o.orderId}`), {
+      trip.orders.map((o) => {
+        const breakdown = getOrderEarningBreakdown(
+          o,
+          baseRiderFeePerTrip,
+          stores,
+          adminSettings,
+          riderCurrentLat,
+          riderCurrentLng,
+        );
+        return update(ref(db, `orders/${o.orderId}`), {
           status: 'DELIVERED',
           verificationMethod: 'PIN',
           verifiedAt,
           updatedAt: verifiedAt,
-        }),
-      ),
+          riderEarnedFee: breakdown.fee,
+          ...(breakdown.distanceKm !== null ? {riderDistanceKm: breakdown.distanceKm} : {}),
+        });
+      }),
     )
       .then(() => {
         setVerifyModalState((s) => ({...s, open: false}));
@@ -1764,12 +1787,22 @@ export default function App() {
       setAssignedOrders((prev) => {
         const next = {...prev};
         trip.orders.forEach((o) => {
+          const breakdown = getOrderEarningBreakdown(
+            o,
+            baseRiderFeePerTrip,
+            stores,
+            adminSettings,
+            riderCurrentLat,
+            riderCurrentLng,
+          );
           next[o.orderId] = {
             ...next[o.orderId],
             status: 'DELIVERED',
             verificationMethod: 'QR_CODE',
             verifiedAt,
             updatedAt: verifiedAt,
+            riderEarnedFee: breakdown.fee,
+            ...(breakdown.distanceKm !== null ? {riderDistanceKm: breakdown.distanceKm} : {}),
           };
         });
         return next;
@@ -1783,14 +1816,24 @@ export default function App() {
     }
 
     void Promise.all(
-      trip.orders.map((o) =>
-        update(ref(db, `orders/${o.orderId}`), {
+      trip.orders.map((o) => {
+        const breakdown = getOrderEarningBreakdown(
+          o,
+          baseRiderFeePerTrip,
+          stores,
+          adminSettings,
+          riderCurrentLat,
+          riderCurrentLng,
+        );
+        return update(ref(db, `orders/${o.orderId}`), {
           status: 'DELIVERED',
           verificationMethod: 'QR_CODE',
           verifiedAt,
           updatedAt: verifiedAt,
-        }),
-      ),
+          riderEarnedFee: breakdown.fee,
+          ...(breakdown.distanceKm !== null ? {riderDistanceKm: breakdown.distanceKm} : {}),
+        });
+      }),
     )
       .then(() => {
         setVerifyModalState((s) => ({...s, open: false}));
@@ -2384,6 +2427,7 @@ export default function App() {
                   completedTrips={completedTrips}
                   allOrders={allOrders}
                   allRiders={allRiders}
+                  stores={stores}
                   currentRiderUid={demoActive ? 'demo_rider_uid' : currentUser?.uid || ''}
                   onOpenHistory={() => switchNav('history')}
                   onOpenPayoutModal={() => {
