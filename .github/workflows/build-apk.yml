@@ -110,7 +110,7 @@ jobs:
           fi
           rm -rf assets
 
-      - name: Configure App Name, Firebase, Background GPS, Notification Icon & Permissions
+      - name: Configure Always-On Native Background Service, Calls, Orders, GPS & Permissions
         run: |
           STRINGS_FILE="android/app/src/main/res/values/strings.xml"
           if [ -f "$STRINGS_FILE" ]; then
@@ -159,6 +159,732 @@ jobs:
           </resources>
           EOF
 
+          JAVA_DIR="android/app/src/main/java/com/gossaigaon/rider"
+          mkdir -p "$JAVA_DIR"
+
+          cat << 'EOF' > "$JAVA_DIR/MainActivity.java"
+          package com.gossaigaon.rider;
+
+          import android.content.Intent;
+          import android.net.Uri;
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.os.PowerManager;
+          import android.provider.Settings;
+          import android.webkit.WebView;
+          import com.getcapacitor.BridgeActivity;
+
+          public class MainActivity extends BridgeActivity {
+              @Override
+              public void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  try {
+                      if (getBridge() != null && getBridge().getWebView() != null) {
+                          WebView webView = getBridge().getWebView();
+                          webView.addJavascriptInterface(new AndroidBridge(this), "AndroidBridge");
+                      }
+                  } catch (Exception ignored) {}
+                  requestIgnoreBatteryOptimizationsIfNeeded();
+              }
+
+              private void requestIgnoreBatteryOptimizationsIfNeeded() {
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                      try {
+                          PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+                          if (pm != null && !pm.isIgnoringBatteryOptimizations(getPackageName())) {
+                              Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                              intent.setData(Uri.parse("package:" + getPackageName()));
+                              startActivity(intent);
+                          }
+                      } catch (Exception ignored) {}
+                  }
+              }
+          }
+          EOF
+
+          cat << 'EOF' > "$JAVA_DIR/AndroidBridge.java"
+          package com.gossaigaon.rider;
+
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.SharedPreferences;
+          import android.media.AudioManager;
+          import android.os.Build;
+          import android.webkit.JavascriptInterface;
+
+          public class AndroidBridge {
+              private final Context context;
+
+              public AndroidBridge(Context context) {
+                  this.context = context.getApplicationContext();
+              }
+
+              @JavascriptInterface
+              public void startTracking(
+                  String uid,
+                  String idToken,
+                  String refreshToken,
+                  String apiKey,
+                  String databaseURL,
+                  String activeOrderIds
+              ) {
+                  try {
+                      SharedPreferences prefs = context.getSharedPreferences("ChutkiRiderBgPrefs", Context.MODE_PRIVATE);
+                      prefs.edit()
+                          .putString("uid", uid != null ? uid : "")
+                          .putString("idToken", idToken != null ? idToken : "")
+                          .putString("refreshToken", refreshToken != null ? refreshToken : "")
+                          .putString("apiKey", apiKey != null ? apiKey : "")
+                          .putString("databaseURL", databaseURL != null ? databaseURL : "")
+                          .putString("activeOrderIds", activeOrderIds != null ? activeOrderIds : "")
+                          .putLong("tokenSavedAt", System.currentTimeMillis())
+                          .putBoolean("trackingActive", true)
+                          .apply();
+
+                      Intent serviceIntent = new Intent(context, RiderForegroundService.class);
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                          context.startForegroundService(serviceIntent);
+                      } else {
+                          context.startService(serviceIntent);
+                      }
+                  } catch (Exception ignored) {}
+              }
+
+              @JavascriptInterface
+              public void stopTracking() {
+                  try {
+                      SharedPreferences prefs = context.getSharedPreferences("ChutkiRiderBgPrefs", Context.MODE_PRIVATE);
+                      prefs.edit().putBoolean("trackingActive", false).apply();
+                      Intent serviceIntent = new Intent(context, RiderForegroundService.class);
+                      context.stopService(serviceIntent);
+                  } catch (Exception ignored) {}
+              }
+
+              @JavascriptInterface
+              public void setSpeakerphoneOn(boolean enabled) {
+                  try {
+                      AudioManager am = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+                      if (am != null) {
+                          am.setMode(enabled ? AudioManager.MODE_IN_COMMUNICATION : AudioManager.MODE_NORMAL);
+                          am.setSpeakerphoneOn(enabled);
+                      }
+                  } catch (Exception ignored) {}
+              }
+          }
+          EOF
+
+          cat << 'EOF' > "$JAVA_DIR/ServiceRestartReceiver.java"
+          package com.gossaigaon.rider;
+
+          import android.content.BroadcastReceiver;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.SharedPreferences;
+          import android.os.Build;
+
+          public class ServiceRestartReceiver extends BroadcastReceiver {
+              @Override
+              public void onReceive(Context context, Intent intent) {
+                  try {
+                      SharedPreferences prefs = context.getSharedPreferences("ChutkiRiderBgPrefs", Context.MODE_PRIVATE);
+                      boolean active = prefs.getBoolean("trackingActive", false);
+                      String uid = prefs.getString("uid", "");
+                      if (active && uid != null && !uid.isEmpty()) {
+                          Intent serviceIntent = new Intent(context, RiderForegroundService.class);
+                          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                              context.startForegroundService(serviceIntent);
+                          } else {
+                              context.startService(serviceIntent);
+                          }
+                      }
+                  } catch (Exception ignored) {}
+              }
+          }
+          EOF
+
+          cat << 'EOF' > "$JAVA_DIR/RiderForegroundService.java"
+          package com.gossaigaon.rider;
+
+          import android.app.AlarmManager;
+          import android.app.Notification;
+          import android.app.NotificationChannel;
+          import android.app.NotificationManager;
+          import android.app.PendingIntent;
+          import android.app.Service;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.SharedPreferences;
+          import android.content.pm.ServiceInfo;
+          import android.location.Location;
+          import android.location.LocationListener;
+          import android.location.LocationManager;
+          import android.media.AudioAttributes;
+          import android.media.RingtoneManager;
+          import android.net.Uri;
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.os.Handler;
+          import android.os.IBinder;
+          import android.os.Looper;
+          import android.os.PowerManager;
+          import android.os.SystemClock;
+          import org.json.JSONObject;
+          import java.io.BufferedReader;
+          import java.io.InputStream;
+          import java.io.InputStreamReader;
+          import java.io.OutputStream;
+          import java.net.HttpURLConnection;
+          import java.net.URL;
+          import java.net.URLEncoder;
+          import java.nio.charset.StandardCharsets;
+          import java.util.ArrayList;
+          import java.util.HashMap;
+          import java.util.HashSet;
+          import java.util.Iterator;
+          import java.util.List;
+          import java.util.Map;
+          import java.util.Set;
+          import java.util.concurrent.Executors;
+          import java.util.concurrent.ScheduledExecutorService;
+          import java.util.concurrent.TimeUnit;
+
+          public class RiderForegroundService extends Service implements LocationListener {
+              private static final String CHANNEL_BG = "chutki_bg_service";
+              private static final String CHANNEL_CALLS = "chutki_urgent_calls";
+              private static final String CHANNEL_ALERTS = "chutki_urgent_alerts";
+              private static final int FG_NOTIFICATION_ID = 1001;
+
+              private ScheduledExecutorService scheduler;
+              private PowerManager.WakeLock wakeLock;
+              private LocationManager locationManager;
+              private volatile double latestLat = 0.0;
+              private volatile double latestLng = 0.0;
+              private String lastNotifiedCallId = "";
+              private boolean ordersInitialized = false;
+              private final Set<String> seenActiveOrders = new HashSet<>();
+              private final Map<String, String> seenOrderStatuses = new HashMap<>();
+              private final Set<String> initializedChatOrders = new HashSet<>();
+              private final Set<String> seenChatMessages = new HashSet<>();
+
+              @Override
+              public void onCreate() {
+                  super.onCreate();
+                  createNotificationChannels();
+                  acquireWakeLock();
+                  startLocationListening();
+                  startBackgroundLoop();
+              }
+
+              @Override
+              public int onStartCommand(Intent intent, int flags, int startId) {
+                  Notification fgNotif = buildForegroundNotification();
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                      try {
+                          startForeground(
+                              FG_NOTIFICATION_ID,
+                              fgNotif,
+                              ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION | ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                          );
+                      } catch (Exception e) {
+                          try {
+                              startForeground(FG_NOTIFICATION_ID, fgNotif, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC);
+                          } catch (Exception ignored) {
+                              startForeground(FG_NOTIFICATION_ID, fgNotif);
+                          }
+                      }
+                  } else {
+                      startForeground(FG_NOTIFICATION_ID, fgNotif);
+                  }
+                  return START_STICKY;
+              }
+
+              @Override
+              public void onTaskRemoved(Intent rootIntent) {
+                  super.onTaskRemoved(rootIntent);
+                  SharedPreferences prefs = getSharedPreferences("ChutkiRiderBgPrefs", MODE_PRIVATE);
+                  if (prefs.getBoolean("trackingActive", false)) {
+                      scheduleSelfRestart();
+                  }
+              }
+
+              private void scheduleSelfRestart() {
+                  try {
+                      Intent restartIntent = new Intent(getApplicationContext(), ServiceRestartReceiver.class);
+                      PendingIntent pi = PendingIntent.getBroadcast(
+                          getApplicationContext(),
+                          2002,
+                          restartIntent,
+                          PendingIntent.FLAG_ONE_SHOT | PendingIntent.FLAG_IMMUTABLE
+                      );
+                      AlarmManager am = (AlarmManager) getSystemService(Context.ALARM_SERVICE);
+                      if (am != null) {
+                          am.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime() + 1500, pi);
+                      }
+                  } catch (Exception ignored) {}
+              }
+
+              private void acquireWakeLock() {
+                  try {
+                      PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+                      if (pm != null && (wakeLock == null || !wakeLock.isHeld())) {
+                          wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ChutkiRider::BgWakeLock");
+                          wakeLock.setReferenceCounted(false);
+                          wakeLock.acquire();
+                      }
+                  } catch (Exception ignored) {}
+              }
+
+              private void startLocationListening() {
+                  new Handler(Looper.getMainLooper()).post(() -> {
+                      try {
+                          locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+                          if (locationManager == null) return;
+                          try {
+                              Location lastGps = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER);
+                              if (lastGps != null) {
+                                  latestLat = lastGps.getLatitude();
+                                  latestLng = lastGps.getLongitude();
+                              }
+                              locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 5000L, 5f, this);
+                          } catch (SecurityException ignored) {}
+                          try {
+                              Location lastNet = locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
+                              if (lastNet != null && latestLat == 0.0) {
+                                  latestLat = lastNet.getLatitude();
+                                  latestLng = lastNet.getLongitude();
+                              }
+                              locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 5000L, 5f, this);
+                          } catch (SecurityException ignored) {}
+                      } catch (Exception ignored) {}
+                  });
+              }
+
+              @Override
+              public void onLocationChanged(Location location) {
+                  if (location != null) {
+                      latestLat = location.getLatitude();
+                      latestLng = location.getLongitude();
+                  }
+              }
+
+              @Override public void onStatusChanged(String p, int s, Bundle e) {}
+              @Override public void onProviderEnabled(String p) {}
+              @Override public void onProviderDisabled(String p) {}
+
+              private void startBackgroundLoop() {
+                  if (scheduler != null && !scheduler.isShutdown()) return;
+                  scheduler = Executors.newSingleThreadScheduledExecutor();
+                  scheduler.scheduleWithFixedDelay(this::runSyncCycle, 2, 5, TimeUnit.SECONDS);
+              }
+
+              private void runSyncCycle() {
+                  try {
+                      SharedPreferences prefs = getSharedPreferences("ChutkiRiderBgPrefs", MODE_PRIVATE);
+                      if (!prefs.getBoolean("trackingActive", false)) {
+                          stopSelf();
+                          return;
+                      }
+                      String uid = prefs.getString("uid", "");
+                      String idToken = prefs.getString("idToken", "");
+                      String refreshToken = prefs.getString("refreshToken", "");
+                      String apiKey = prefs.getString("apiKey", "");
+                      String dbUrl = prefs.getString("databaseURL", "");
+                      long tokenSavedAt = prefs.getLong("tokenSavedAt", 0L);
+
+                      if (uid.isEmpty() || dbUrl.isEmpty()) return;
+
+                      if (System.currentTimeMillis() - tokenSavedAt > 40 * 60 * 1000L && !refreshToken.isEmpty() && !apiKey.isEmpty()) {
+                          String refreshed = refreshFirebaseIdToken(apiKey, refreshToken);
+                          if (refreshed != null && !refreshed.isEmpty()) {
+                              idToken = refreshed;
+                              prefs.edit().putString("idToken", idToken).putLong("tokenSavedAt", System.currentTimeMillis()).apply();
+                          }
+                      }
+
+                      String authParam = "?auth=" + URLEncoder.encode(idToken, "UTF-8");
+
+                      // 1. Check Incoming Call Inbox
+                      HttpResult callRes = httpGet(dbUrl + "/riderCallInbox/" + uid + ".json" + authParam);
+                      if (callRes.code == 401 && !refreshToken.isEmpty() && !apiKey.isEmpty()) {
+                          String refreshed = refreshFirebaseIdToken(apiKey, refreshToken);
+                          if (refreshed != null && !refreshed.isEmpty()) {
+                              idToken = refreshed;
+                              prefs.edit().putString("idToken", idToken).putLong("tokenSavedAt", System.currentTimeMillis()).apply();
+                              authParam = "?auth=" + URLEncoder.encode(idToken, "UTF-8");
+                              callRes = httpGet(dbUrl + "/riderCallInbox/" + uid + ".json" + authParam);
+                          }
+                      }
+
+                      if (callRes.code == 200 && callRes.body != null && !callRes.body.equals("null")) {
+                          JSONObject callObj = new JSONObject(callRes.body);
+                          String status = callObj.optString("status", "");
+                          String callId = callObj.optString("callId", "");
+                          long updatedAt = callObj.optLong("updatedAt", callObj.optLong("startedAt", 0L));
+                          long ageMs = Math.abs(System.currentTimeMillis() - updatedAt);
+                          if ("RINGING".equals(status) && !callId.isEmpty() && ageMs < 65000L && !callId.equals(lastNotifiedCallId)) {
+                              lastNotifiedCallId = callId;
+                              String callerRole = callObj.optString("callerRole", "CUSTOMER");
+                              String callerName = "RESTAURANT".equals(callerRole)
+                                  ? callObj.optString("restaurantName", "Restaurant")
+                                  : callObj.optString("customerLabel", "Customer");
+                              showUrgentCallNotification(callerRole, callerName, callObj.optString("orderId", ""));
+                          }
+                      }
+
+                      // 2. Check Assigned Orders & Ready Status
+                      List<String> currentActiveOrders = new ArrayList<>();
+                      HttpResult ordersRes = httpGet(dbUrl + "/orders.json" + authParam);
+                      if (ordersRes.code == 200 && ordersRes.body != null && !ordersRes.body.equals("null")) {
+                          JSONObject allOrders = new JSONObject(ordersRes.body);
+                          Iterator<String> keys = allOrders.keys();
+                          while (keys.hasNext()) {
+                              String orderId = keys.next();
+                              JSONObject o = allOrders.optJSONObject(orderId);
+                              if (o == null) continue;
+                              if (!uid.equals(o.optString("deliveryUid", ""))) continue;
+
+                              String st = o.optString("status", "");
+                              boolean isActive = !"DELIVERED".equals(st) && !"CANCELLED".equals(st);
+                              if (isActive) {
+                                  currentActiveOrders.add(orderId);
+                              }
+
+                              String shortId = orderId.length() > 6 ? orderId.substring(orderId.length() - 6) : orderId;
+                              if (ordersInitialized) {
+                                  if (isActive && !seenActiveOrders.contains(orderId)) {
+                                      showUrgentAlertNotification(
+                                          ("order_new_" + orderId).hashCode(),
+                                          "🛵 New Grocery Trip Assigned!",
+                                          "Order #" + shortId + " assigned to you. Tap to accept!"
+                                      );
+                                  }
+                                  String prevSt = seenOrderStatuses.get(orderId);
+                                  if (prevSt != null && !"READY_FOR_PICKUP".equals(prevSt) && "READY_FOR_PICKUP".equals(st)) {
+                                      showUrgentAlertNotification(
+                                          ("order_ready_" + orderId).hashCode(),
+                                          "📦 Store Order Ready for Pickup!",
+                                          "Order #" + shortId + " is packed and ready at the store."
+                                      );
+                                  }
+                              }
+                              if (isActive) {
+                                  seenActiveOrders.add(orderId);
+                              }
+                              seenOrderStatuses.put(orderId, st);
+                          }
+                          ordersInitialized = true;
+                      }
+
+                      // 3. Check Unread Chat Messages on Active Orders
+                      for (String orderId : currentActiveOrders) {
+                          HttpResult chatRes = httpGet(dbUrl + "/tripChats/" + orderId + "/messages.json" + authParam);
+                          if (chatRes.code == 200 && chatRes.body != null && !chatRes.body.equals("null")) {
+                              JSONObject msgs = new JSONObject(chatRes.body);
+                              boolean wasHydrated = initializedChatOrders.contains(orderId);
+                              Iterator<String> mKeys = msgs.keys();
+                              while (mKeys.hasNext()) {
+                                  String msgId = mKeys.next();
+                                  String dedupe = orderId + ":" + msgId;
+                                  JSONObject m = msgs.optJSONObject(msgId);
+                                  if (m == null) continue;
+                                  if (!wasHydrated) {
+                                      seenChatMessages.add(dedupe);
+                                      continue;
+                                  }
+                                  String senderUid = m.optString("senderUid", "");
+                                  String receiverUid = m.optString("receiverUid", "");
+                                  String msgStatus = m.optString("status", "SENT");
+                                  if (!senderUid.isEmpty() && !senderUid.equals(uid)
+                                      && (receiverUid.isEmpty() || receiverUid.equals(uid))
+                                      && !"READ".equalsIgnoreCase(msgStatus)
+                                      && !seenChatMessages.contains(dedupe)) {
+                                      seenChatMessages.add(dedupe);
+                                      String text = m.optString("message", m.optString("text", "Tap to view message"));
+                                      String shortId = orderId.length() > 6 ? orderId.substring(orderId.length() - 6) : orderId;
+                                      showUrgentAlertNotification(
+                                          ("chat_" + dedupe).hashCode(),
+                                          "💬 New Message · #" + shortId,
+                                          text
+                                      );
+                                  }
+                              }
+                              initializedChatOrders.add(orderId);
+                          }
+                      }
+
+                      // 4. Push Live Background GPS Coordinates
+                      if (latestLat != 0.0 && latestLng != 0.0) {
+                          long now = System.currentTimeMillis();
+                          double roundedLat = Math.round(latestLat * 1000000.0) / 1000000.0;
+                          double roundedLng = Math.round(latestLng * 1000000.0) / 1000000.0;
+                          JSONObject riderPatch = new JSONObject();
+                          riderPatch.put("lat", roundedLat);
+                          riderPatch.put("lng", roundedLng);
+                          riderPatch.put("online", true);
+                          riderPatch.put("lastSeen", now);
+                          riderPatch.put("lastLocationUpdate", now);
+                          httpPatch(dbUrl + "/deliveryPartners/" + uid + ".json" + authParam, riderPatch.toString());
+
+                          JSONObject orderPatch = new JSONObject();
+                          orderPatch.put("riderLat", roundedLat);
+                          orderPatch.put("riderLng", roundedLng);
+                          orderPatch.put("lastLocationUpdate", now);
+                          for (String orderId : currentActiveOrders) {
+                              httpPatch(dbUrl + "/orders/" + orderId + ".json" + authParam, orderPatch.toString());
+                          }
+                      }
+                  } catch (Exception ignored) {}
+              }
+
+              private String refreshFirebaseIdToken(String apiKey, String refreshToken) {
+                  HttpURLConnection conn = null;
+                  try {
+                      URL url = new URL("https://securetoken.googleapis.com/v1/token?key=" + URLEncoder.encode(apiKey, "UTF-8"));
+                      conn = (HttpURLConnection) url.openConnection();
+                      conn.setRequestMethod("POST");
+                      conn.setConnectTimeout(8000);
+                      conn.setReadTimeout(8000);
+                      conn.setDoOutput(true);
+                      conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+                      String body = "grant_type=refresh_token&refresh_token=" + URLEncoder.encode(refreshToken, "UTF-8");
+                      try (OutputStream os = conn.getOutputStream()) {
+                          os.write(body.getBytes(StandardCharsets.UTF_8));
+                      }
+                      if (conn.getResponseCode() == 200) {
+                          String resp = readStream(conn.getInputStream());
+                          JSONObject json = new JSONObject(resp);
+                          return json.optString("id_token", "");
+                      }
+                  } catch (Exception ignored) {
+                  } finally {
+                      if (conn != null) conn.disconnect();
+                  }
+                  return null;
+              }
+
+              private static class HttpResult {
+                  final int code;
+                  final String body;
+                  HttpResult(int code, String body) {
+                      this.code = code;
+                      this.body = body;
+                  }
+              }
+
+              private HttpResult httpGet(String urlStr) {
+                  HttpURLConnection conn = null;
+                  try {
+                      conn = (HttpURLConnection) new URL(urlStr).openConnection();
+                      conn.setRequestMethod("GET");
+                      conn.setConnectTimeout(7000);
+                      conn.setReadTimeout(7000);
+                      int code = conn.getResponseCode();
+                      String body = code >= 200 && code < 300 ? readStream(conn.getInputStream()) : "";
+                      return new HttpResult(code, body);
+                  } catch (Exception e) {
+                      return new HttpResult(0, "");
+                  } finally {
+                      if (conn != null) conn.disconnect();
+                  }
+              }
+
+              private void httpPatch(String urlStr, String jsonBody) {
+                  HttpURLConnection conn = null;
+                  try {
+                      conn = (HttpURLConnection) new URL(urlStr).openConnection();
+                      conn.setRequestMethod("POST");
+                      conn.setRequestProperty("X-HTTP-Method-Override", "PATCH");
+                      conn.setRequestProperty("Content-Type", "application/json");
+                      conn.setConnectTimeout(7000);
+                      conn.setReadTimeout(7000);
+                      conn.setDoOutput(true);
+                      try (OutputStream os = conn.getOutputStream()) {
+                          os.write(jsonBody.getBytes(StandardCharsets.UTF_8));
+                      }
+                      conn.getResponseCode();
+                  } catch (Exception ignored) {
+                  } finally {
+                      if (conn != null) conn.disconnect();
+                  }
+              }
+
+              private String readStream(InputStream is) throws Exception {
+                  if (is == null) return "";
+                  StringBuilder sb = new StringBuilder();
+                  try (BufferedReader br = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
+                      String line;
+                      while ((line = br.readLine()) != null) {
+                          sb.append(line);
+                      }
+                  }
+                  return sb.toString();
+              }
+
+              private void createNotificationChannels() {
+                  if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
+                  NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                  if (nm == null) return;
+
+                  NotificationChannel bgChannel = new NotificationChannel(
+                      CHANNEL_BG,
+                      "Chutki Rider Background Duty",
+                      NotificationManager.IMPORTANCE_LOW
+                  );
+                  bgChannel.setDescription("Keeps Rider online for incoming calls, orders and live GPS");
+                  nm.createNotificationChannel(bgChannel);
+
+                  Uri ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
+                  AudioAttributes ringAttrs = new AudioAttributes.Builder()
+                      .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                      .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                      .build();
+                  NotificationChannel callChannel = new NotificationChannel(
+                      CHANNEL_CALLS,
+                      "Incoming Voice Calls",
+                      NotificationManager.IMPORTANCE_HIGH
+                  );
+                  callChannel.enableVibration(true);
+                  callChannel.setVibrationPattern(new long[]{0, 500, 300, 500, 300, 500});
+                  callChannel.setSound(ringtoneUri, ringAttrs);
+                  callChannel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+                  nm.createNotificationChannel(callChannel);
+
+                  Uri alertUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
+                  NotificationChannel alertChannel = new NotificationChannel(
+                      CHANNEL_ALERTS,
+                      "New Trip & Chat Alerts",
+                      NotificationManager.IMPORTANCE_HIGH
+                  );
+                  alertChannel.enableVibration(true);
+                  alertChannel.setVibrationPattern(new long[]{0, 300, 150, 300});
+                  alertChannel.setSound(alertUri, new AudioAttributes.Builder()
+                      .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                      .build());
+                  alertChannel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+                  nm.createNotificationChannel(alertChannel);
+              }
+
+              private Notification buildForegroundNotification() {
+                  Intent launchIntent = new Intent(this, MainActivity.class);
+                  launchIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                  PendingIntent pi = PendingIntent.getActivity(
+                      this,
+                      101,
+                      launchIntent,
+                      PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+                  );
+
+                  Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                      ? new Notification.Builder(this, CHANNEL_BG)
+                      : new Notification.Builder(this);
+
+                  builder.setSmallIcon(R.drawable.ic_stat_notify)
+                      .setContentTitle("Chutki Rider • Duty Online")
+                      .setContentText("Listening for calls, new trips & syncing live GPS")
+                      .setContentIntent(pi)
+                      .setOngoing(true);
+
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                      builder.setColor(0xFF16A34A);
+                  }
+                  return builder.build();
+              }
+
+              private void showUrgentCallNotification(String callerRole, String callerName, String orderId) {
+                  try {
+                      Intent launchIntent = new Intent(this, MainActivity.class);
+                      launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                      PendingIntent fullScreenPi = PendingIntent.getActivity(
+                          this,
+                          301,
+                          launchIntent,
+                          PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+                      );
+
+                      String shortId = orderId.length() > 6 ? orderId.substring(orderId.length() - 6) : orderId;
+                      Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                          ? new Notification.Builder(this, CHANNEL_CALLS)
+                          : new Notification.Builder(this);
+
+                      builder.setSmallIcon(R.drawable.ic_stat_notify)
+                          .setContentTitle("📞 Incoming " + ("RESTAURANT".equals(callerRole) ? "Restaurant" : "Customer") + " Call")
+                          .setContentText(callerName + (shortId.isEmpty() ? "" : " · Order #" + shortId) + " — Tap to Answer")
+                          .setContentIntent(fullScreenPi)
+                          .setFullScreenIntent(fullScreenPi, true)
+                          .setAutoCancel(true);
+
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                          builder.setCategory(Notification.CATEGORY_CALL).setColor(0xFF16A34A);
+                      }
+
+                      NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                      if (nm != null) {
+                          nm.notify(3001, builder.build());
+                      }
+
+                      try {
+                          startActivity(launchIntent);
+                      } catch (Exception ignored) {}
+                  } catch (Exception ignored) {}
+              }
+
+              private void showUrgentAlertNotification(int id, String title, String body) {
+                  try {
+                      Intent launchIntent = new Intent(this, MainActivity.class);
+                      launchIntent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                      PendingIntent pi = PendingIntent.getActivity(
+                          this,
+                          Math.abs(id % 10000),
+                          launchIntent,
+                          PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+                      );
+
+                      Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                          ? new Notification.Builder(this, CHANNEL_ALERTS)
+                          : new Notification.Builder(this);
+
+                      builder.setSmallIcon(R.drawable.ic_stat_notify)
+                          .setContentTitle(title)
+                          .setContentText(body)
+                          .setContentIntent(pi)
+                          .setAutoCancel(true);
+
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                          builder.setColor(0xFF16A34A);
+                      }
+
+                      NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+                      if (nm != null) {
+                          nm.notify(Math.abs(id % 1900000000) + 4000, builder.build());
+                      }
+                  } catch (Exception ignored) {}
+              }
+
+              @Override
+              public void onDestroy() {
+                  if (scheduler != null) {
+                      scheduler.shutdownNow();
+                  }
+                  if (locationManager != null) {
+                      try {
+                          locationManager.removeUpdates(this);
+                      } catch (Exception ignored) {}
+                  }
+                  if (wakeLock != null && wakeLock.isHeld()) {
+                      try {
+                          wakeLock.release();
+                      } catch (Exception ignored) {}
+                  }
+                  super.onDestroy();
+              }
+
+              @Override
+              public IBinder onBind(Intent intent) {
+                  return null;
+              }
+          }
+          EOF
+
           MANIFEST="android/app/src/main/AndroidManifest.xml"
           node -e '
             const fs = require("fs");
@@ -172,7 +898,12 @@ jobs:
               "android.permission.ACCESS_BACKGROUND_LOCATION",
               "android.permission.FOREGROUND_SERVICE",
               "android.permission.FOREGROUND_SERVICE_LOCATION",
+              "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
               "android.permission.WAKE_LOCK",
+              "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
+              "android.permission.USE_FULL_SCREEN_INTENT",
+              "android.permission.VIBRATE",
+              "android.permission.RECEIVE_BOOT_COMPLETED",
               "android.permission.CAMERA",
               "android.permission.RECORD_AUDIO",
               "android.permission.MODIFY_AUDIO_SETTINGS",
@@ -189,15 +920,21 @@ jobs:
               xml = xml.replace("<application", `${permTags.join("\n")}\n    <application`);
             }
 
-            const metaTags = [];
+            const appTags = [];
             if (!xml.includes("com.google.firebase.messaging.default_notification_icon")) {
-              metaTags.push(`        <meta-data android:name="com.google.firebase.messaging.default_notification_icon" android:resource="@drawable/ic_stat_notify" />`);
+              appTags.push(`        <meta-data android:name="com.google.firebase.messaging.default_notification_icon" android:resource="@drawable/ic_stat_notify" />`);
             }
             if (!xml.includes("com.google.firebase.messaging.default_notification_color")) {
-              metaTags.push(`        <meta-data android:name="com.google.firebase.messaging.default_notification_color" android:resource="@color/notification_accent" />`);
+              appTags.push(`        <meta-data android:name="com.google.firebase.messaging.default_notification_color" android:resource="@color/notification_accent" />`);
             }
-            if (metaTags.length > 0) {
-              xml = xml.replace("</application>", `${metaTags.join("\n")}\n    </application>`);
+            if (!xml.includes("RiderForegroundService")) {
+              appTags.push(`        <service android:name=".RiderForegroundService" android:enabled="true" android:exported="false" android:stopWithTask="false" android:foregroundServiceType="location|dataSync" />`);
+            }
+            if (!xml.includes("ServiceRestartReceiver")) {
+              appTags.push(`        <receiver android:name=".ServiceRestartReceiver" android:enabled="true" android:exported="true"><intent-filter><action android:name="android.intent.action.BOOT_COMPLETED" /></intent-filter></receiver>`);
+            }
+            if (appTags.length > 0) {
+              xml = xml.replace("</application>", `${appTags.join("\n")}\n    </application>`);
             }
 
             fs.writeFileSync(file, xml, "utf8");
