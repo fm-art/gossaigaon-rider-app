@@ -1,4 +1,5 @@
 import {Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import {App as CapacitorApp} from '@capacitor/app';
 import {Capacitor, CapacitorHttp, registerPlugin} from '@capacitor/core';
 import type {BackgroundGeolocationPlugin} from '@capacitor-community/background-geolocation';
 import {FirebaseAuthentication} from '@capacitor-firebase/authentication';
@@ -352,6 +353,8 @@ export default function App() {
     soundEnabled,
     onNotify: showToast,
   });
+  const commRef = useRef(comm);
+  commRef.current = comm;
 
   const openChatOrder: OrderWithId | null = useMemo(() => {
     if (!comm.openChatTarget) return null;
@@ -843,7 +846,7 @@ export default function App() {
     if (res.permission === 'granted') {
       showToast('🔔 Push Notifications enabled!', 'success');
       void showSystemPushNotification({
-        title: 'Gossaigaon Fleet Alerts Active',
+        title: 'Chutki Rider Alerts Active',
         body: 'You will receive instant alerts for new trips, store ready updates, and payouts.',
         tag: 'push-enabled',
         tab: 'active',
@@ -857,7 +860,7 @@ export default function App() {
 
   const handleSendTestPush = useCallback(async () => {
     const ok = await showSystemPushNotification({
-      title: '🛵 Gossaigaon Fleet Test Alert',
+      title: '🛵 Chutki Rider Test Alert',
       body: 'Push notifications are working! You will get instant dispatch & payout alerts.',
       tag: 'test-push',
       tab: 'active',
@@ -946,7 +949,6 @@ export default function App() {
           });
         });
 
-        // Native OkHttp PATCH continues working even when Android Doze throttles WebView WebSockets
         if (
           Capacitor.isNativePlatform() &&
           now - lastNativeHttpSyncMsRef.current >= 4000
@@ -998,7 +1000,7 @@ export default function App() {
     if (Capacitor.isNativePlatform()) {
       void BackgroundGeolocation.addWatcher(
         {
-          backgroundTitle: 'Chutki Fleet • Live GPS Active',
+          backgroundTitle: 'Chutki Rider • Live GPS Active',
           backgroundMessage: 'Tracking delivery location in background. Go Offline to stop.',
           requestPermissions: true,
           stale: false,
@@ -1320,6 +1322,7 @@ export default function App() {
     };
   }, [isDashboardUnlocked, idleLockEnabled, terminalLocked, logThreat]);
 
+  // Unified Tab Navigation + Android Hardware Back Button + Browser Popstate Handler
   const switchNav = useCallback(
     (tabName: RiderTab, pushHistory = true) => {
       if (tabName !== activeTabRef.current) {
@@ -1341,6 +1344,8 @@ export default function App() {
     verifyOpen: verifyModalState.open,
     depositModalOpen,
     chatOpen: Boolean(comm.openChatTarget),
+    callActive: Boolean(comm.callSession),
+    terminalLocked,
   });
   modalOpenStateRef.current = {
     feedbackModalOpen,
@@ -1350,37 +1355,97 @@ export default function App() {
     verifyOpen: verifyModalState.open,
     depositModalOpen,
     chatOpen: Boolean(comm.openChatTarget),
+    callActive: Boolean(comm.callSession),
+    terminalLocked,
   };
 
   useEffect(() => {
     window.history.replaceState({screen: activeTabRef.current}, '');
-    const handlePop = () => {
+
+    const handleBackAction = (isNativeHardwareBack: boolean) => {
       const m = modalOpenStateRef.current;
-      if (m.chatOpen) return comm.closeOrderChat();
-      if (m.feedbackModalOpen) return setFeedbackModalOpen(false);
-      if (m.cancelModalTripId) return setCancelModalTripId(null);
-      if (m.sosModalTripId) return setSosModalTripId(null);
-      if (m.payoutModalOpen) return setPayoutModalOpen(false);
-      if (m.verifyOpen) return setVerifyModalState((s) => ({...s, open: false}));
-      if (m.depositModalOpen) return setDepositModalOpen(false);
+
+      if (m.callActive || m.terminalLocked) {
+        if (!isNativeHardwareBack) {
+          window.history.pushState({screen: activeTabRef.current}, '');
+        }
+        return;
+      }
+
+      if (m.chatOpen) {
+        commRef.current.closeOrderChat();
+        return;
+      }
+      if (m.feedbackModalOpen) {
+        setFeedbackModalOpen(false);
+        return;
+      }
+      if (m.cancelModalTripId) {
+        setCancelModalTripId(null);
+        return;
+      }
+      if (m.sosModalTripId) {
+        setSosModalTripId(null);
+        return;
+      }
+      if (m.payoutModalOpen) {
+        setPayoutModalOpen(false);
+        return;
+      }
+      if (m.verifyOpen) {
+        setVerifyModalState((s) => ({...s, open: false}));
+        return;
+      }
+      if (m.depositModalOpen) {
+        setDepositModalOpen(false);
+        return;
+      }
 
       if (activeTabRef.current !== 'active') {
         switchNav('active', false);
+        window.history.replaceState({screen: 'active'}, '');
         return;
       }
+
       const now = Date.now();
       if (now - riderLastBackTimeRef.current < 2000) {
-        window.history.back();
+        if (isNativeHardwareBack && Capacitor.isNativePlatform()) {
+          if (riderDataRef.current?.online) {
+            void CapacitorApp.minimizeApp();
+          } else {
+            void CapacitorApp.exitApp();
+          }
+        } else {
+          window.history.back();
+        }
       } else {
         riderLastBackTimeRef.current = now;
         showToast('Press BACK again to exit', 'info');
-        window.history.pushState({screen: 'active'}, '');
+        if (!isNativeHardwareBack) {
+          window.history.pushState({screen: 'active'}, '');
+        }
       }
     };
-    window.addEventListener('popstate', handlePop);
-    return () => window.removeEventListener('popstate', handlePop);
-  }, [switchNav, showToast, comm]);
 
+    const handlePop = () => handleBackAction(false);
+    window.addEventListener('popstate', handlePop);
+
+    let backListenerPromise: Promise<{remove: () => Promise<void>}> | null = null;
+    if (Capacitor.isNativePlatform()) {
+      backListenerPromise = CapacitorApp.addListener('backButton', () => {
+        handleBackAction(true);
+      });
+    }
+
+    return () => {
+      window.removeEventListener('popstate', handlePop);
+      if (backListenerPromise) {
+        void backListenerPromise.then((h) => h.remove()).catch(() => undefined);
+      }
+    };
+  }, [switchNav, showToast]);
+
+  // Rider actions
   const handleToggleSound = () => {
     triggerCue('tap');
     setSoundEnabled((prev) => {
