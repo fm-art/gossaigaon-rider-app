@@ -81,29 +81,109 @@ interface UseCommunicationManagerParams {
   onNotify: (msg: string, type?: ToastType) => void;
 }
 
-function playRingtonePulse(): void {
-  if (typeof window === 'undefined') return;
+interface NativeRingtoneBridge {
+  startRingtone?: () => void;
+  stopRingtone?: () => void;
+}
+
+function getNativeRingtoneBridge(): NativeRingtoneBridge | null {
+  if (typeof window === 'undefined') return null;
+  return (window as unknown as {AndroidBridge?: NativeRingtoneBridge}).AndroidBridge || null;
+}
+
+function startNativeCallRingtone(): boolean {
   try {
-    const AudioCtx =
-      window.AudioContext ||
-      (window as unknown as {webkitAudioContext?: typeof AudioContext}).webkitAudioContext;
-    if (!AudioCtx) return;
-    const ctx = new AudioCtx();
+    const bridge = getNativeRingtoneBridge();
+    if (bridge && typeof bridge.startRingtone === 'function') {
+      bridge.startRingtone();
+      return true;
+    }
+  } catch {
+    // fallback to WebAudio
+  }
+  return false;
+}
+
+function stopNativeCallRingtone(): void {
+  try {
+    const bridge = getNativeRingtoneBridge();
+    if (bridge && typeof bridge.stopRingtone === 'function') {
+      bridge.stopRingtone();
+    }
+  } catch {
+    // ignore
+  }
+}
+
+let sharedRingAudioCtx: AudioContext | null = null;
+
+function getRingAudioContext(): AudioContext | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    if (!sharedRingAudioCtx || sharedRingAudioCtx.state === 'closed') {
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as {webkitAudioContext?: typeof AudioContext}).webkitAudioContext;
+      if (!AudioCtx) return null;
+      sharedRingAudioCtx = new AudioCtx();
+    }
+    if (sharedRingAudioCtx.state === 'suspended') {
+      void sharedRingAudioCtx.resume().catch(() => undefined);
+    }
+    return sharedRingAudioCtx;
+  } catch {
+    return null;
+  }
+}
+
+function playIncomingRingtoneBurst(): void {
+  const ctx = getRingAudioContext();
+  if (!ctx) return;
+  try {
     const now = ctx.currentTime;
-    [0, 0.28].forEach((offset) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(660, now + offset);
-      gain.gain.setValueAtTime(0.18, now + offset);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.22);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(now + offset);
-      osc.stop(now + offset + 0.22);
+    // Classic dual-tone phone ring cadence (two rich bursts)
+    [0, 0.55].forEach((burstOffset) => {
+      [523.25, 659.25, 783.99].forEach((freq, idx) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        const start = now + burstOffset + idx * 0.08;
+        osc.frequency.setValueAtTime(freq, start);
+        gain.gain.setValueAtTime(0.22, start);
+        gain.gain.exponentialRampToValueAtTime(0.001, start + 0.38);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(start);
+        osc.stop(start + 0.38);
+      });
     });
   } catch {
-    // Audio playback requires prior user gesture on strict mobile browsers
+    // ignore audio unlock restrictions
+  }
+}
+
+function playOutgoingRingbackBurst(): void {
+  const ctx = getRingAudioContext();
+  if (!ctx) return;
+  try {
+    const now = ctx.currentTime;
+    // Standard telecom 440Hz + 480Hz ringback tone ("trrring-trrring")
+    [0, 0.45].forEach((offset) => {
+      [440, 480].forEach((freq) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, now + offset);
+        gain.gain.setValueAtTime(0.09, now + offset);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.35);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now + offset);
+        osc.stop(now + offset + 0.35);
+      });
+    });
+  } catch {
+    // ignore
   }
 }
 
@@ -151,6 +231,7 @@ export function useCommunicationManager({
   const isRiderApproved = riderData?.approved === true && riderData?.suspended !== true;
 
   const clearRingTimers = useCallback(() => {
+    stopNativeCallRingtone();
     if (ringTimeoutRef.current !== null) {
       window.clearTimeout(ringTimeoutRef.current);
       ringTimeoutRef.current = null;
@@ -184,31 +265,68 @@ export function useCommunicationManager({
     return () => window.clearInterval(id);
   }, [callSession?.phase, callSession?.connectedAt]);
 
+  // Incoming Call Ringtone + Outgoing Call Ringback Tone
   useEffect(() => {
-    if (!callSession || callSession.phase !== 'INCOMING_RINGING') {
+    if (!callSession) {
+      stopNativeCallRingtone();
       if (ringtoneIntervalRef.current !== null) {
         window.clearInterval(ringtoneIntervalRef.current);
         ringtoneIntervalRef.current = null;
       }
       return;
     }
-    if (soundEnabledRef.current) {
-      playRingtonePulse();
+
+    if (callSession.phase === 'INCOMING_RINGING') {
+      const usedNativeRing = startNativeCallRingtone();
+      if (!usedNativeRing && soundEnabledRef.current) {
+        playIncomingRingtoneBurst();
+      }
+      triggerDeviceVibration([500, 250, 500, 250, 500]);
+
+      const id = window.setInterval(() => {
+        if (!usedNativeRing && soundEnabledRef.current) {
+          playIncomingRingtoneBurst();
+        }
+        triggerDeviceVibration([500, 250, 500]);
+      }, 2400);
+      ringtoneIntervalRef.current = id;
+
+      return () => {
+        stopNativeCallRingtone();
+        window.clearInterval(id);
+        if (ringtoneIntervalRef.current === id) {
+          ringtoneIntervalRef.current = null;
+        }
+      };
     }
-    triggerDeviceVibration([300, 150, 300]);
-    const id = window.setInterval(() => {
+
+    if (callSession.phase === 'OUTGOING_RINGING') {
+      stopNativeCallRingtone();
       if (soundEnabledRef.current) {
-        playRingtonePulse();
+        playOutgoingRingbackBurst();
       }
-      triggerDeviceVibration([300, 150, 300]);
-    }, 2400);
-    ringtoneIntervalRef.current = id;
-    return () => {
-      window.clearInterval(id);
-      if (ringtoneIntervalRef.current === id) {
-        ringtoneIntervalRef.current = null;
-      }
-    };
+      const id = window.setInterval(() => {
+        if (soundEnabledRef.current) {
+          playOutgoingRingbackBurst();
+        }
+      }, 2800);
+      ringtoneIntervalRef.current = id;
+
+      return () => {
+        window.clearInterval(id);
+        if (ringtoneIntervalRef.current === id) {
+          ringtoneIntervalRef.current = null;
+        }
+      };
+    }
+
+    // Connected / Connecting / Ended -> stop any ringtone immediately
+    stopNativeCallRingtone();
+    if (ringtoneIntervalRef.current !== null) {
+      window.clearInterval(ringtoneIntervalRef.current);
+      ringtoneIntervalRef.current = null;
+    }
+    return undefined;
   }, [callSession?.phase, callSession?.callId]);
 
   const syncInboxAndCallRecord = useCallback(
