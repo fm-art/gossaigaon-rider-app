@@ -99,6 +99,9 @@ export interface OrderRecord {
   status?: string;
   totalAmount?: number;
   deliveryCharge?: number;
+  distanceKm?: number;
+  riderDistanceKm?: number;
+  riderEarnedFee?: number;
   items?: OrderItem[] | Record<string, OrderItem>;
   riderAccepted?: boolean | null;
   riderAcceptedAt?: number | null;
@@ -300,6 +303,8 @@ export interface FeedbackRecord {
 export interface AdminSettings {
   upiId?: string;
   riderBaseFee?: number;
+  riderPerKmRate?: number;
+  riderMinFee?: number;
   deliveryCharge?: number;
   maxRiderCashLimit?: number;
   riderAcceptTimeoutSec?: number;
