@@ -114,10 +114,138 @@ export function validateSettlementUtr(
   return {valid: true};
 }
 
-export function getRiderFeeForOrder(order: OrderRecord | null | undefined, baseRiderFeePerTrip: number): number {
-  return order && order.deliveryCharge !== undefined && Number(order.deliveryCharge) > 0
-    ? Number(order.deliveryCharge)
-    : baseRiderFeePerTrip;
+export interface OrderEarningBreakdown {
+  fee: number;
+  distanceKm: number | null;
+  baseFee: number;
+  perKmRate: number;
+  minFee: number;
+  isDistanceBased: boolean;
+}
+
+export function calculateOrderDistanceKm(
+  order: OrderRecord | null | undefined,
+  stores?: Record<string, StoreInfo>,
+  fallbackRiderLat?: number,
+  fallbackRiderLng?: number,
+): number | null {
+  if (!order) return null;
+
+  if (order.riderDistanceKm !== undefined && Number(order.riderDistanceKm) > 0) {
+    return Number(Number(order.riderDistanceKm).toFixed(2));
+  }
+  if (order.distanceKm !== undefined && Number(order.distanceKm) > 0) {
+    return Number(Number(order.distanceKm).toFixed(2));
+  }
+
+  const cLat = order.customerLat;
+  const cLng = order.customerLng;
+  if (cLat === null || cLat === undefined || cLng === null || cLng === undefined) {
+    return null;
+  }
+
+  const store = stores && order.restaurantId ? stores[order.restaurantId] : undefined;
+  if (store && store.lat !== undefined && store.lng !== undefined) {
+    const dist = calculateDistanceKm(store.lat, store.lng, cLat, cLng);
+    if (dist !== null && dist > 0) {
+      return Number(dist.toFixed(2));
+    }
+  }
+
+  const rLat = order.riderLat ?? fallbackRiderLat;
+  const rLng = order.riderLng ?? fallbackRiderLng;
+  if (rLat !== undefined && rLng !== undefined) {
+    const dist = calculateDistanceKm(rLat, rLng, cLat, cLng);
+    if (dist !== null && dist > 0) {
+      return Number(dist.toFixed(2));
+    }
+  }
+
+  return null;
+}
+
+export function getOrderEarningBreakdown(
+  order: OrderRecord | null | undefined,
+  baseRiderFeePerTrip: number,
+  stores?: Record<string, StoreInfo>,
+  adminSettings?: AdminSettings,
+  fallbackRiderLat?: number,
+  fallbackRiderLng?: number,
+): OrderEarningBreakdown {
+  const baseFee =
+    adminSettings?.riderBaseFee && Number(adminSettings.riderBaseFee) > 0
+      ? Number(adminSettings.riderBaseFee)
+      : 15;
+  const perKmRate =
+    adminSettings?.riderPerKmRate && Number(adminSettings.riderPerKmRate) > 0
+      ? Number(adminSettings.riderPerKmRate)
+      : 8;
+  const minFee =
+    adminSettings?.riderMinFee && Number(adminSettings.riderMinFee) > 0
+      ? Number(adminSettings.riderMinFee)
+      : 20;
+
+  const distanceKm = calculateOrderDistanceKm(
+    order,
+    stores,
+    fallbackRiderLat,
+    fallbackRiderLng,
+  );
+
+  if (order?.riderEarnedFee !== undefined && Number(order.riderEarnedFee) > 0) {
+    return {
+      fee: Number(order.riderEarnedFee),
+      distanceKm,
+      baseFee,
+      perKmRate,
+      minFee,
+      isDistanceBased: true,
+    };
+  }
+
+  if (distanceKm !== null && distanceKm > 0) {
+    const calculatedFee = Math.max(minFee, Math.round(baseFee + distanceKm * perKmRate));
+    return {
+      fee: calculatedFee,
+      distanceKm,
+      baseFee,
+      perKmRate,
+      minFee,
+      isDistanceBased: true,
+    };
+  }
+
+  const fallbackFee =
+    order && order.deliveryCharge !== undefined && Number(order.deliveryCharge) > 0
+      ? Number(order.deliveryCharge)
+      : baseRiderFeePerTrip;
+
+  return {
+    fee: fallbackFee,
+    distanceKm: null,
+    baseFee,
+    perKmRate,
+    minFee,
+    isDistanceBased: false,
+  };
+}
+
+export function getRiderFeeForOrder(
+  order: OrderRecord | null | undefined,
+  baseRiderFeePerTrip: number,
+  stores?: Record<string, StoreInfo>,
+  adminSettings?: AdminSettings,
+  fallbackRiderLat?: number,
+  fallbackRiderLng?: number,
+): number {
+  return getOrderEarningBreakdown(
+    order,
+    baseRiderFeePerTrip,
+    stores,
+    adminSettings,
+    fallbackRiderLat,
+    fallbackRiderLng,
+  ).fee;
 }
 
 export function normalizeOrderItems(items: OrderRecord['items']): OrderItem[] {
@@ -223,13 +351,15 @@ export function calculateFinancialSummary(
   riderSettlements: Record<string, SettlementRecord>,
   myRiderPayouts: Record<string, RiderPayoutRecord>,
   baseRiderFeePerTrip: number,
+  stores?: Record<string, StoreInfo>,
+  adminSettings?: AdminSettings,
 ): FinancialSummary {
   let totalCodCollected = 0;
   let totalRiderEarned = 0;
 
   Object.values(assignedOrders || {}).forEach((o) => {
     if (o.status === 'DELIVERED') {
-      totalRiderEarned += getRiderFeeForOrder(o, baseRiderFeePerTrip);
+      totalRiderEarned += getRiderFeeForOrder(o, baseRiderFeePerTrip, stores, adminSettings);
       if (o.paymentMode !== 'UPI' && o.paymentMode !== 'WALLET') {
         totalCodCollected += Number(o.totalAmount || 0);
       }
@@ -638,6 +768,8 @@ export function calculateLast7DaysPerformance(
   completedTrips: TripGroup[],
   baseRiderFeePerTrip: number,
   nowMs = Date.now(),
+  stores?: Record<string, StoreInfo>,
+  adminSettings?: AdminSettings,
 ): DailyPerformancePoint[] {
   const anchor = new Date(nowMs);
   anchor.setHours(0, 0, 0, 0);
@@ -685,7 +817,7 @@ export function calculateLast7DaysPerformance(
 
     bucket.trips += 1;
     bucket.earnings += deliveredOrders.reduce(
-      (sum, o) => sum + getRiderFeeForOrder(o, baseRiderFeePerTrip),
+      (sum, o) => sum + getRiderFeeForOrder(o, baseRiderFeePerTrip, stores, adminSettings),
       0,
     );
   });
@@ -841,6 +973,7 @@ export interface HistoryOrderBreakdown {
   earning: number;
   billAmount: number;
   itemCount: number;
+  distanceKm?: number | null;
 }
 
 export interface DeliveredHistoryEntry {
@@ -853,6 +986,7 @@ export interface DeliveredHistoryEntry {
   paymentMode: string;
   totalEarnings: number;
   totalBillAmount: number;
+  totalDistanceKm?: number;
   orderBreakdowns: HistoryOrderBreakdown[];
 }
 
@@ -860,6 +994,7 @@ export function buildDeliveredHistoryEntries(
   completedTrips: TripGroup[],
   stores: Record<string, StoreInfo>,
   baseRiderFeePerTrip: number,
+  adminSettings?: AdminSettings,
 ): DeliveredHistoryEntry[] {
   const entries: DeliveredHistoryEntry[] = [];
 
@@ -876,22 +1011,28 @@ export function buildDeliveredHistoryEntries(
     const orderBreakdowns: HistoryOrderBreakdown[] = [];
     let totalEarnings = 0;
     let totalBillAmount = 0;
+    let totalDistanceKm = 0;
 
     deliveredOrders.forEach((o) => {
       const storeName = stores[o.restaurantId || '']?.name || 'Store';
       storeNameSet.add(storeName);
-      const earning = getRiderFeeForOrder(o, baseRiderFeePerTrip);
+      const breakdown = getOrderEarningBreakdown(o, baseRiderFeePerTrip, stores, adminSettings);
+      const earning = breakdown.fee;
       const billAmount = Number(o.totalAmount || 0);
       const itemCount = normalizeOrderItems(o.items).reduce((s, i) => s + Number(i.qty || 1), 0);
 
       totalEarnings += earning;
       totalBillAmount += billAmount;
+      if (breakdown.distanceKm !== null) {
+        totalDistanceKm += breakdown.distanceKm;
+      }
       orderBreakdowns.push({
         orderId: o.orderId,
         storeName,
         earning,
         billAmount,
         itemCount,
+        distanceKm: breakdown.distanceKm,
       });
     });
 
@@ -915,6 +1056,7 @@ export function buildDeliveredHistoryEntries(
       paymentMode: trip.paymentMode || 'COD',
       totalEarnings,
       totalBillAmount,
+      totalDistanceKm: Number(totalDistanceKm.toFixed(2)),
       orderBreakdowns,
     });
   });
@@ -979,7 +1121,6 @@ export function calculateOptimalDeliverySequence(
   const completedPickups = orders.filter((o) => isOrderPickedUp(o));
   const pendingPickups = orders.filter((o) => !isOrderPickedUp(o) && o.status !== 'CANCELLED');
 
-  // Build unique drop-off stops from active orders (handles both same-customer combo and multi-drop)
   interface DropoffCandidate {
     key: string;
     address: string;
@@ -1022,7 +1163,6 @@ export function calculateOptimalDeliverySequence(
     });
   const dropoffCandidates = Array.from(dropoffMap.values());
 
-  // Compute naive distance in original order for savings comparison
   let naiveLat = startLat;
   let naiveLng = startLng;
   let naiveKm = 0;
@@ -1044,7 +1184,6 @@ export function calculateOptimalDeliverySequence(
     }
   });
 
-  // Greedy nearest-neighbor route construction
   const steps: OptimalSequenceStop[] = [];
   const orderedPickupOrderIds: string[] = [];
 
@@ -1232,7 +1371,6 @@ export function buildOrderVolumeHeatmap(
 
     if (lat === null || lng === null) return;
 
-    // Clean concise area label (first segment before ", Gossaigaon" if multi-part, else full)
     const conciseLabel = areaLabel.replace(/,\s*Gossaigaon(\s*Bazar)?$/i, '').trim() || areaLabel;
 
     rawPoints.push({
@@ -1252,7 +1390,6 @@ export function buildOrderVolumeHeatmap(
     };
   }
 
-  // Greedy spatial clustering within clusterRadiusKm
   interface MutableCluster {
     sumLat: number;
     sumLng: number;
@@ -1364,6 +1501,8 @@ export function calculateWeeklyLeaderboard(
   baseRiderFeePerTrip: number,
   nowMs = Date.now(),
   limit = 10,
+  stores?: Record<string, StoreInfo>,
+  adminSettings?: AdminSettings,
 ): WeeklyLeaderboardData {
   const weekStartMs = getCurrentWeekStartMs(nowMs);
   const weekEndMs = weekStartMs + 7 * 24 * 60 * 60 * 1000 - 1;
@@ -1402,7 +1541,7 @@ export function calculateWeeklyLeaderboard(
     }
     acc.tripKeys.add(tripKey);
     acc.deliveredOrders += 1;
-    acc.weeklyEarnings += getRiderFeeForOrder(o, baseRiderFeePerTrip);
+    acc.weeklyEarnings += getRiderFeeForOrder(o, baseRiderFeePerTrip, stores, adminSettings);
   });
 
   const unsorted: Array<Omit<LeaderboardEntry, 'rank'>> = [];
@@ -1765,7 +1904,6 @@ export function getDemoSeedState(now = Date.now()): {
     },
   };
 
-  // Gossaigaon-wide historical delivered orders (for demand heatmap visualization in demo mode)
   const allOrders: Record<string, OrderRecord> = {
     ...assignedOrders,
     ord_hist_station_1: {
@@ -1850,15 +1988,14 @@ export function getDemoSeedState(now = Date.now()): {
     },
   };
 
-  // Add current-week delivered trips across 10 fellow riders so Leaderboard ranks Top 10 out of 11
   const demoFleetTripTargets: Array<{uid: string; trips: number; lat: number; lng: number; addr: string}> = [
-    {uid: 'other_rider_1', trips: 9, lat: 26.4541, lng: 89.9744, addr: 'Station Para, Gossaigaon'}, // +3 existing = 12
-    {uid: 'other_rider_2', trips: 7, lat: 26.4577, lng: 89.9712, addr: 'College Road, Gossaigaon'}, // +3 existing = 10
+    {uid: 'other_rider_1', trips: 9, lat: 26.4541, lng: 89.9744, addr: 'Station Para, Gossaigaon'},
+    {uid: 'other_rider_2', trips: 7, lat: 26.4577, lng: 89.9712, addr: 'College Road, Gossaigaon'},
     {uid: 'other_rider_4', trips: 9, lat: 26.4542, lng: 89.9741, addr: 'Station Para, Gossaigaon'},
     {uid: 'other_rider_5', trips: 7, lat: 26.4575, lng: 89.9715, addr: 'College Road, Gossaigaon'},
     {uid: 'other_rider_6', trips: 6, lat: 26.4582, lng: 89.9786, addr: 'Civil Hospital Ward 3, Gossaigaon'},
     {uid: 'other_rider_7', trips: 5, lat: 26.4544, lng: 89.9745, addr: 'Station Para, Gossaigaon'},
-    {uid: 'other_rider_3', trips: 1, lat: 26.4581, lng: 89.9785, addr: 'Civil Hospital Ward 3, Gossaigaon'}, // +2 existing = 3
+    {uid: 'other_rider_3', trips: 1, lat: 26.4581, lng: 89.9785, addr: 'Civil Hospital Ward 3, Gossaigaon'},
     {uid: 'other_rider_8', trips: 2, lat: 26.451, lng: 89.9765, addr: 'Habrubil, Gossaigaon'},
     {uid: 'other_rider_9', trips: 2, lat: 26.4576, lng: 89.9713, addr: 'College Road, Gossaigaon'},
     {uid: 'other_rider_10', trips: 1, lat: 26.454, lng: 89.9743, addr: 'Station Para, Gossaigaon'},
@@ -1999,7 +2136,9 @@ export function getDemoSeedState(now = Date.now()): {
     },
     adminSettings: {
       upiId: 'gossaigaonbazar@apl',
-      riderBaseFee: 25,
+      riderBaseFee: 15,
+      riderPerKmRate: 8,
+      riderMinFee: 20,
       maxRiderCashLimit: 3000,
       riderAcceptTimeoutSec: 45,
       minRiderPayout: 10,
@@ -2008,7 +2147,7 @@ export function getDemoSeedState(now = Date.now()): {
       maxRiderCodDeposit: 25000,
       allowRiderPassTrip: true,
       allowRiderSos: true,
-      riderAnnouncement: 'Evening peak bonus +₹10 active across Gossaigaon Bazar!',
+      riderAnnouncement: 'Distance-based rider pay active across Gossaigaon Bazar!',
       supportHours: '7:00 AM - 10:30 PM',
       supportPhone: '9876500000',
       supportWhatsapp: '9876500000',
